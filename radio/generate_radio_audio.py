@@ -68,6 +68,56 @@ def get_jst_time() -> str:
     return datetime.now(jst).strftime("%H時%M分")
 
 
+def get_jst_date() -> str:
+    """JST現在日付を取得（読み上げ用）"""
+    jst = timezone(timedelta(hours=9))
+    now = datetime.now(jst)
+    weekdays = ["月", "火", "水", "木", "金", "土", "日"]
+    return f"{now.month}月{now.day}日{weekdays[now.weekday()]}曜日"
+
+
+def fetch_weather() -> dict:
+    """気象庁APIから東日本・西日本の天気を取得"""
+    # 東京（130000）と大阪（270000）の天気を代表として使用
+    weather_info = {"east": "", "west": ""}
+
+    try:
+        # 東京の天気
+        req = urllib.request.Request(
+            "https://www.jma.go.jp/bosai/forecast/data/forecast/130000.json",
+            headers={"User-Agent": "GaryuRadio/1.0"}
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            # 今日の天気を取得
+            weather = data[0]["timeSeries"][0]["areas"][0]["weathers"][0]
+            # 長い天気説明を短縮
+            weather_short = weather.replace("　", "").replace("所により", "一部")[:15]
+            weather_info["east"] = weather_short
+            print(f"  [Weather] East (Tokyo): {weather_short}")
+    except Exception as e:
+        print(f"  Warning: Failed to fetch East weather: {e}")
+        weather_info["east"] = "情報取得中"
+
+    try:
+        # 大阪の天気
+        req = urllib.request.Request(
+            "https://www.jma.go.jp/bosai/forecast/data/forecast/270000.json",
+            headers={"User-Agent": "GaryuRadio/1.0"}
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            weather = data[0]["timeSeries"][0]["areas"][0]["weathers"][0]
+            weather_short = weather.replace("　", "").replace("所により", "一部")[:15]
+            weather_info["west"] = weather_short
+            print(f"  [Weather] West (Osaka): {weather_short}")
+    except Exception as e:
+        print(f"  Warning: Failed to fetch West weather: {e}")
+        weather_info["west"] = "情報取得中"
+
+    return weather_info
+
+
 def format_price_for_tts(price: float) -> str:
     """価格を読み上げやすい形式に変換（ゴマン問題対策）
 
@@ -101,6 +151,15 @@ def normalize_for_tts(text: str) -> str:
     return text
 
 
+def get_api_headers() -> dict:
+    """API呼び出し用のヘッダーを取得（API Key認証対応）"""
+    headers = {"User-Agent": "GaryuRadio/1.0"}
+    api_key = os.environ.get("GARYU_API_KEY")
+    if api_key:
+        headers["X-API-Key"] = api_key
+    return headers
+
+
 def fetch_market_live() -> dict:
     """本番APIから市場データを取得"""
     try:
@@ -122,7 +181,7 @@ def fetch_news() -> list[dict]:
     try:
         req = urllib.request.Request(
             "https://8-mon.com/api/garyu-news",
-            headers={"User-Agent": "GaryuRadio/1.0"}
+            headers=get_api_headers()
         )
         with urllib.request.urlopen(req, timeout=10) as resp:
             data = json.loads(resp.read().decode("utf-8"))
@@ -144,7 +203,7 @@ def fetch_ai_comment(section: str) -> str | None:
         else:
             url = f"https://8-mon.com/api/garyu-comment?section={section}"
 
-        req = urllib.request.Request(url, headers={"User-Agent": "GaryuRadio/1.0"})
+        req = urllib.request.Request(url, headers=get_api_headers())
         with urllib.request.urlopen(req, timeout=10) as resp:
             data = json.loads(resp.read().decode("utf-8"))
             comment = data.get("comment", "")
@@ -220,8 +279,17 @@ def scrape_google_news_nikkei() -> list[str]:
         with urllib.request.urlopen(req, timeout=10) as resp:
             content = resp.read().decode("utf-8")
 
-        # RSS XMLをパース
-        soup = BeautifulSoup(content, "xml")
+        # RSS XMLをパース（lxml-xmlが使えない場合はhtml.parserにフォールバック）
+        try:
+            soup = BeautifulSoup(content, "lxml-xml")
+        except Exception:
+            # フォールバック: 正規表現でタイトル抽出
+            import re
+            titles = re.findall(r'<title>(?:<!\[CDATA\[)?([^<\]]+)(?:\]\]>)?</title>', content)
+            headlines = [t.strip() for t in titles[1:11] if t.strip()]  # 最初はフィード名なのでスキップ
+            print(f"  [Scrape] Fetched {len(headlines)} headlines (regex fallback)")
+            return headlines
+
         items = soup.find_all("item")[:10]  # 上位10件
 
         headlines = []
@@ -274,16 +342,41 @@ def fetch_market_analysis(headlines: list[str], price_change: float, price_chang
 # 対話台本生成関数
 # ============================================================
 
-def generate_opening() -> list[DialogueLine]:
-    """オープニング"""
+def generate_opening(weather: dict = None) -> list[DialogueLine]:
+    """オープニング（日付・天気付き）"""
     time = get_jst_time()
-    return [
+    date = get_jst_date()
+
+    # 天気情報がない場合は取得
+    if weather is None:
+        weather = fetch_weather()
+
+    east_weather = weather.get("east", "")
+    west_weather = weather.get("west", "")
+
+    lines = [
         DialogueLine("metan", f"皆さんこんにちは。八門遁甲マーケットラジオの時間です。"),
         DialogueLine("zundamon", f"ずんだもんなのだ！今日も一緒に市場を見ていくのだ！"),
-        DialogueLine("metan", f"現在時刻は{time}。本日も日経平均の動きを読み解いていきましょう。"),
-        DialogueLine("zundamon", f"めたんはいつも難しいこと言うから、わかりやすく教えてほしいのだ。"),
-        DialogueLine("metan", f"もちろんです。では早速、市況から見ていきましょうか。"),
+        DialogueLine("metan", f"本日は{date}、現在時刻は{time}です。"),
     ]
+
+    # 天気情報を追加
+    if east_weather and west_weather:
+        lines.extend([
+            DialogueLine("zundamon", f"今日のお天気はどうなのだ？"),
+            DialogueLine("metan", f"東日本は{east_weather}、西日本は{west_weather}となっています。"),
+        ])
+    elif east_weather:
+        lines.append(DialogueLine("metan", f"今日の東日本は{east_weather}です。"))
+    elif west_weather:
+        lines.append(DialogueLine("metan", f"今日の西日本は{west_weather}です。"))
+
+    lines.extend([
+        DialogueLine("zundamon", f"なるほどなのだ！で、市場はどうなってるのだ？"),
+        DialogueLine("metan", f"では早速、本日の市況から見ていきましょう。"),
+    ])
+
+    return lines
 
 
 def generate_market_summary(market_data: dict = None, news: list[dict] = None) -> list[DialogueLine]:
@@ -415,83 +508,103 @@ def generate_market_analysis(market_data: dict) -> list[DialogueLine]:
 
 
 def generate_sentiment() -> list[DialogueLine]:
-    """センチメント分析"""
-    cached = fetch_ai_comment("feargreed")
+    """センチメント分析（信用倍率ベース）
 
-    if cached:
-        return [
-            DialogueLine("metan", "次は市場センチメントを見ていきましょう。"),
-            DialogueLine("zundamon", "センチメント？何それなのだ？"),
-            DialogueLine("metan", "市場参加者の心理状態のことです。恐怖が強いか、強欲が強いか。"),
-            DialogueLine("zundamon", "なるほどなのだ！で、今はどうなのだ？"),
-            DialogueLine("metan", cached),
-            DialogueLine("zundamon", "勉強になるのだ！"),
-        ]
-
-    # フォールバック
+    データソース: 日経レバETF（1570）の信用倍率
+    - 信用買い残 ÷ 信用売り残 = 信用倍率
+    - 週次で東証が公表するデータを使用
+    """
+    # データ取得
     metrics = fetch_integrated_metrics()
     cr_data = metrics.get("credit_ratio", {}).get("latest", {})
     cr = cr_data.get("value", 1.2)
+    percentile = cr_data.get("percentile", 50)
 
-    if cr < 0.8:
-        return [
-            DialogueLine("metan", "センチメント分析です。"),
-            DialogueLine("zundamon", "今の市場の雰囲気はどうなのだ？"),
-            DialogueLine("metan", f"信用倍率は{cr:.2f}倍。極度の恐怖状態です。"),
-            DialogueLine("zundamon", f"こ、怖いのだ！"),
-            DialogueLine("metan", f"ただし、大衆が恐怖するときこそ、逆張りの好機という見方もあります。"),
-            DialogueLine("zundamon", f"ピンチはチャンスなのだ？"),
-            DialogueLine("metan", f"ただし落ちるナイフは掴まないこと。タイミングが重要です。"),
-        ]
-    elif cr < 1.0:
-        return [
-            DialogueLine("metan", "センチメント分析です。"),
-            DialogueLine("zundamon", "みんなの気持ちはどうなのだ？"),
-            DialogueLine("metan", f"信用倍率{cr:.2f}倍。恐怖が広がっています。"),
-            DialogueLine("zundamon", f"みんな怖がってるのだ？"),
-            DialogueLine("metan", f"売り手優勢の局面ですね。悲観の極みは反転の兆しになることも。"),
-            DialogueLine("zundamon", f"でも焦っちゃダメなのだ？"),
-            DialogueLine("metan", f"その通り。時期尚早の判断は禁物です。"),
-        ]
-    elif cr < 1.5:
-        return [
-            DialogueLine("metan", "センチメント分析にいきましょう。"),
-            DialogueLine("zundamon", "今の雰囲気は？"),
-            DialogueLine("metan", f"信用倍率{cr:.2f}倍。中立的な状態です。"),
-            DialogueLine("zundamon", f"どっちつかずなのだ？"),
-            DialogueLine("metan", f"買い手と売り手が拮抗しています。次の方向性を見極める局面ですね。"),
-            DialogueLine("zundamon", f"じっと見守るのだ！"),
-        ]
-    elif cr < 2.0:
-        return [
-            DialogueLine("metan", "センチメント分析です。"),
-            DialogueLine("zundamon", "みんな元気なのだ？"),
-            DialogueLine("metan", f"信用倍率{cr:.2f}倍。楽観ムードが広がっています。"),
-            DialogueLine("zundamon", f"いい感じなのだ！"),
-            DialogueLine("metan", f"買い手優勢ですが、過熱感には注意が必要です。"),
-            DialogueLine("zundamon", f"調子に乗りすぎちゃダメなのだ？"),
-            DialogueLine("metan", f"そうですね。冷静さを忘れずに。"),
-        ]
-    elif cr < 3.0:
-        return [
-            DialogueLine("metan", "センチメントを確認しましょう。"),
-            DialogueLine("zundamon", "どうなのだ？"),
-            DialogueLine("metan", f"信用倍率{cr:.2f}倍。強欲モードに入っています。"),
-            DialogueLine("zundamon", f"強欲？なんか怖いのだ。"),
-            DialogueLine("metan", f"大衆が熱狂するとき、賢者は慎重になります。"),
-            DialogueLine("zundamon", f"高値掴みに注意なのだ！"),
-            DialogueLine("metan", f"その通りです。"),
-        ]
+    # AIコメント取得
+    cached = fetch_ai_comment("feargreed")
+
+    # === 導入パート: データソースの説明 ===
+    lines = [
+        DialogueLine("metan", "次は市場センチメント、フィアーアンドグリード指数を見ていきましょう。"),
+        DialogueLine("zundamon", "フィアーアンドグリード？恐怖と強欲なのだ？"),
+        DialogueLine("metan", "はい。このサイトでは日経レバETF、銘柄コード1570の信用倍率をもとに算出しています。"),
+        DialogueLine("zundamon", "なんで日経レバなのだ？"),
+        DialogueLine("metan", "日経レバは日経平均の2倍の値動きをするETFで、個人投資家に大人気なんです。"),
+        DialogueLine("zundamon", "みんな買ってるのだ！"),
+        DialogueLine("metan", "そうなんです。だからこのETFの信用取引の状況を見れば、個人投資家の心理がわかるんですね。"),
+    ]
+
+    # === 統計解説パート ===
+    lines.extend([
+        DialogueLine("zundamon", "で、信用倍率って何なのだ？"),
+        DialogueLine("metan", "信用買い残を信用売り残で割った数値です。"),
+        DialogueLine("metan", f"現在の信用倍率は{cr:.2f}倍。過去データと比較するとパーセンタイルは{percentile:.0f}パーセントです。"),
+    ])
+
+    # パーセンタイル解説
+    if percentile <= 20:
+        lines.append(DialogueLine("zundamon", "パーセンタイル20以下！かなり低いのだ！"))
+        lines.append(DialogueLine("metan", "そうですね。過去データの中でも下位20パーセントに入る悲観的な水準です。"))
+    elif percentile <= 40:
+        lines.append(DialogueLine("zundamon", "やや低めなのだ？"))
+        lines.append(DialogueLine("metan", "平均より悲観寄りですね。売り手が多い状況です。"))
+    elif percentile <= 60:
+        lines.append(DialogueLine("zundamon", "真ん中あたりなのだ！"))
+        lines.append(DialogueLine("metan", "過去の平均的な水準ですね。特に偏りはありません。"))
+    elif percentile <= 80:
+        lines.append(DialogueLine("zundamon", "やや高めなのだ？"))
+        lines.append(DialogueLine("metan", "楽観寄りですね。買い手が多い状況です。"))
     else:
-        return [
-            DialogueLine("metan", "センチメント分析、重要な局面です。"),
-            DialogueLine("zundamon", "何か大変なのだ？"),
-            DialogueLine("metan", f"信用倍率{cr:.2f}倍。極度の強欲状態です。"),
-            DialogueLine("zundamon", f"えっ！それってやばいのだ？"),
-            DialogueLine("metan", f"歴史的に見て、このような過熱相場は調整を招くことが多いです。"),
-            DialogueLine("zundamon", f"利益確定を考えた方がいいのだ？"),
-            DialogueLine("metan", f"選択肢の一つとして検討すべき局面かもしれません。"),
-        ]
+        lines.append(DialogueLine("zundamon", "パーセンタイル80超え！かなり高いのだ！"))
+        lines.append(DialogueLine("metan", "過去データの中でも上位20パーセントに入る強気な水準です。"))
+
+    # === 評価損益の推定解説 ===
+    lines.extend([
+        DialogueLine("zundamon", "買い残が多いと何がわかるのだ？"),
+        DialogueLine("metan", "実は、信用買いをしている人たちの含み損益が推定できるんです。"),
+        DialogueLine("zundamon", "え！そんなことわかるのだ？"),
+    ])
+
+    # 買い残の評価損益状況を推定（倍率から推測）
+    if cr > 2.0:
+        lines.extend([
+            DialogueLine("metan", "信用倍率が2倍を超えているということは、買い残が売り残の2倍以上あるということ。"),
+            DialogueLine("metan", "多くの個人投資家が強気で買いポジションを持っています。"),
+            DialogueLine("zundamon", "みんな儲かってるのだ？"),
+            DialogueLine("metan", "相場が上がっていれば含み益ですが、ここから下がると一斉に含み損になるリスクがあります。"),
+            DialogueLine("zundamon", "なるほど。高値掴みに注意なのだ！"),
+        ])
+    elif cr > 1.5:
+        lines.extend([
+            DialogueLine("metan", "買い手優勢の状況ですね。"),
+            DialogueLine("metan", "相場が上がれば買い残は含み益、下がれば含み損になります。"),
+            DialogueLine("zundamon", "上がってほしいのだ！"),
+        ])
+    elif cr > 1.0:
+        lines.extend([
+            DialogueLine("metan", "買い手と売り手がほぼ拮抗しています。"),
+            DialogueLine("zundamon", "どっちが勝つかわからないのだ。"),
+            DialogueLine("metan", "そうですね。次の材料で方向感が決まる局面です。"),
+        ])
+    else:
+        lines.extend([
+            DialogueLine("metan", "信用倍率1倍未満は、売り残が買い残より多い状況です。"),
+            DialogueLine("zundamon", "みんな下がると思ってるのだ？"),
+            DialogueLine("metan", "悲観的な見方が多いですね。ただし、売り残は将来の買い戻し需要でもあります。"),
+            DialogueLine("zundamon", "踏み上げってやつなのだ？"),
+            DialogueLine("metan", "その通り。相場が上がり始めると、売り方の買い戻しで上昇が加速することがあります。"),
+        ])
+
+    # === AIコメント ===
+    if cached:
+        lines.extend([
+            DialogueLine("metan", "それでは臥龍ちゃんの分析です。"),
+            DialogueLine("metan", cached),
+        ])
+
+    lines.append(DialogueLine("zundamon", "勉強になるのだ！"))
+
+    return lines
 
 
 def generate_volatility() -> list[DialogueLine]:
@@ -861,10 +974,11 @@ def main():
         print("  Please start VOICEVOX engine first.")
         return
 
-    # 市場データとニュースを事前取得
-    print("\nFetching market data and news...")
+    # 市場データ・ニュース・天気を事前取得
+    print("\nFetching market data, news, and weather...")
     market_data = fetch_market_live()
     news = fetch_news()
+    weather = fetch_weather()
 
     # 出力ディレクトリ作成
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -880,8 +994,10 @@ def main():
     for corner_id, dialogue_func in CORNERS:
         print(f"\nGenerating {corner_id}...")
 
-        # market-summary, market-analysisは特別処理
-        if corner_id == "market-summary":
+        # 特別処理が必要なコーナー
+        if corner_id == "opening":
+            dialogues = generate_opening(weather)
+        elif corner_id == "market-summary":
             dialogues = generate_market_summary(market_data, news)
         elif corner_id == "market-analysis":
             dialogues = generate_market_analysis(market_data)
