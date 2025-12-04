@@ -40,7 +40,7 @@ jobs:
 
       - name: Install Python dependencies
         run: |
-          pip install requests pydub numpy boto3
+          pip install requests pydub numpy boto3 beautifulsoup4 lxml
 
       - name: Wait for VOICEVOX
         run: |

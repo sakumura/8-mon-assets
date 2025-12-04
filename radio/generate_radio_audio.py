@@ -19,6 +19,7 @@ from pydub import AudioSegment
 import numpy as np
 import urllib.request
 import re
+from bs4 import BeautifulSoup
 
 # パス設定
 SCRIPT_DIR = Path(__file__).parent
@@ -211,6 +212,58 @@ def fetch_option_oi() -> dict:
         return {}
 
 
+def scrape_google_news_nikkei() -> list[str]:
+    """Google Newsから日経関連ニュースをスクレイピング"""
+    try:
+        url = "https://news.google.com/rss/search?q=日経平均+OR+日経225+OR+株価&hl=ja&gl=JP&ceid=JP:ja"
+        req = urllib.request.Request(url, headers={"User-Agent": "GaryuRadio/1.0"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            content = resp.read().decode("utf-8")
+
+        # RSS XMLをパース
+        soup = BeautifulSoup(content, "xml")
+        items = soup.find_all("item")[:10]  # 上位10件
+
+        headlines = []
+        for item in items:
+            title = item.find("title")
+            if title:
+                headlines.append(title.text.strip())
+
+        print(f"  [Scrape] Fetched {len(headlines)} headlines from Google News")
+        return headlines
+    except Exception as e:
+        print(f"  Warning: Failed to scrape Google News: {e}")
+        return []
+
+
+def fetch_market_analysis(headlines: list[str], price_change: float, price_change_pct: float) -> dict:
+    """Workers AI APIで市場要因分析を取得"""
+    try:
+        payload = json.dumps({
+            "headlines": headlines,
+            "priceChange": price_change,
+            "priceChangePercent": price_change_pct,
+        }).encode("utf-8")
+
+        req = urllib.request.Request(
+            "https://8-mon.com/api/garyu-market-analysis",
+            data=payload,
+            headers={
+                "User-Agent": "GaryuRadio/1.0",
+                "Content-Type": "application/json",
+            },
+            method="POST"
+        )
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            print(f"  [API] Market analysis: {data.get('source')}")
+            return data
+    except Exception as e:
+        print(f"  Warning: Failed to fetch market analysis: {e}")
+        return {"bullishFactors": [], "bearishFactors": [], "summary": ""}
+
+
 # ============================================================
 # 対話台本生成関数
 # ============================================================
@@ -297,6 +350,60 @@ def generate_market_summary(market_data: dict = None, news: list[dict] = None) -
             if i == 1:
                 lines.append(DialogueLine("zundamon", "それは重要なのだ？"))
                 lines.append(DialogueLine("metan", "市場に影響を与える可能性がありますね。"))
+
+    return lines
+
+
+def generate_market_analysis(market_data: dict) -> list[DialogueLine]:
+    """市場要因分析コーナー（Workers AIで上昇/下降要因を分析）"""
+    price_change = market_data.get("change", 0)
+    price_change_pct = market_data.get("changePercent", 0)
+
+    # Google Newsからニュースを取得
+    headlines = scrape_google_news_nikkei()
+    if not headlines:
+        return [
+            DialogueLine("metan", "本日の要因分析ですが、ニュースの取得に時間がかかっています。"),
+            DialogueLine("zundamon", "次のコーナーに進むのだ！"),
+        ]
+
+    # Workers AIで分析
+    analysis = fetch_market_analysis(headlines, price_change, price_change_pct)
+
+    bullish = analysis.get("bullishFactors", [])
+    bearish = analysis.get("bearishFactors", [])
+    summary = analysis.get("summary", "")
+
+    lines = [
+        DialogueLine("metan", "続いて、本日の相場要因を分析していきましょう。"),
+        DialogueLine("zundamon", "なんで上がったり下がったりするのか知りたいのだ！"),
+    ]
+
+    # 上昇要因
+    if bullish:
+        lines.append(DialogueLine("metan", "まず上昇要因から。"))
+        for i, factor in enumerate(bullish[:3], 1):
+            lines.append(DialogueLine("metan", f"{i}つ目、{factor}"))
+        lines.append(DialogueLine("zundamon", "なるほど、それで上がってるのだ！"))
+
+    # 下降要因
+    if bearish:
+        lines.append(DialogueLine("metan", "一方、下落圧力となっている要因もあります。"))
+        for i, factor in enumerate(bearish[:3], 1):
+            lines.append(DialogueLine("metan", f"{i}つ目、{factor}"))
+        lines.append(DialogueLine("zundamon", "そっちも気になるのだ。"))
+
+    # 総括
+    if summary:
+        lines.append(DialogueLine("metan", f"総合すると、{summary}"))
+        lines.append(DialogueLine("zundamon", "よく分かったのだ！ありがとうなのだ！"))
+
+    if not bullish and not bearish:
+        lines.extend([
+            DialogueLine("metan", "本日は明確な材料に乏しい相場ですね。"),
+            DialogueLine("zundamon", "様子見なのだ？"),
+            DialogueLine("metan", "次の材料を待つ局面かもしれません。"),
+        ])
 
     return lines
 
@@ -687,6 +794,7 @@ def generate_closing() -> list[DialogueLine]:
 CORNERS = [
     ("opening", generate_opening),
     ("market-summary", None),  # 特別処理
+    ("market-analysis", None),  # 特別処理: 市場要因分析
     ("sentiment", generate_sentiment),
     ("volatility", generate_volatility),
     ("correlation", generate_correlation),
@@ -766,9 +874,11 @@ def main():
     for corner_id, dialogue_func in CORNERS:
         print(f"\nGenerating {corner_id}...")
 
-        # market-summaryは特別処理（市場データとニュースを渡す）
+        # market-summary, market-analysisは特別処理
         if corner_id == "market-summary":
             dialogues = generate_market_summary(market_data, news)
+        elif corner_id == "market-analysis":
+            dialogues = generate_market_analysis(market_data)
         else:
             dialogues = dialogue_func()
 
