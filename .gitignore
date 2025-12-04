@@ -26,3 +26,6 @@ radio/ai_cache/
 # OS
 .DS_Store
 Thumbs.db
+
+# Claude Code config (private)
+.claude/
