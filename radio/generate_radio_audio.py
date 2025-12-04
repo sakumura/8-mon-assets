@@ -246,13 +246,19 @@ def fetch_market_analysis(headlines: list[str], price_change: float, price_chang
             "priceChangePercent": price_change_pct,
         }).encode("utf-8")
 
+        headers = {
+            "User-Agent": "GaryuRadio/1.0",
+            "Content-Type": "application/json",
+        }
+        # API Key認証（環境変数から取得）
+        api_key = os.environ.get("GARYU_API_KEY")
+        if api_key:
+            headers["X-API-Key"] = api_key
+
         req = urllib.request.Request(
             "https://8-mon.com/api/garyu-market-analysis",
             data=payload,
-            headers={
-                "User-Agent": "GaryuRadio/1.0",
-                "Content-Type": "application/json",
-            },
+            headers=headers,
             method="POST"
         )
         with urllib.request.urlopen(req, timeout=30) as resp:

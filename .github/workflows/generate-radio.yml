@@ -56,6 +56,8 @@ jobs:
           done
 
       - name: Generate audio
+        env:
+          GARYU_API_KEY: ${{ secrets.GARYU_API_KEY }}
         run: |
           mkdir -p output
           python radio/generate_radio_audio.py --output-dir output
