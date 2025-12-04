@@ -12,6 +12,12 @@ on:
 jobs:
   generate:
     runs-on: ubuntu-latest
+    services:
+      voicevox:
+        image: voicevox/voicevox_engine:cpu-ubuntu20.04-latest
+        ports:
+          - 50021:50021
+
     steps:
       - name: Free up disk space
         run: |
@@ -34,11 +40,20 @@ jobs:
 
       - name: Install Python dependencies
         run: |
-          # CPU版PyTorchを先にインストール（CUDAなしで約700MB節約）
-          pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
-          # numpy 1.x系でpyopenjtalkとの互換性を確保
-          pip install "numpy<2.0"
-          pip install style-bert-vits2 pydub scipy huggingface_hub boto3
+          pip install requests pydub numpy boto3
+
+      - name: Wait for VOICEVOX
+        run: |
+          echo "Waiting for VOICEVOX engine..."
+          for i in {1..30}; do
+            if curl -s http://localhost:50021/version > /dev/null; then
+              echo "VOICEVOX is ready!"
+              curl -s http://localhost:50021/version
+              break
+            fi
+            echo "Waiting... ($i/30)"
+            sleep 2
+          done
 
       - name: Generate audio
         run: |

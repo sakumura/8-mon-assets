@@ -1,84 +1,64 @@
 """
-臥龍ラジオ音声生成スクリプト（8-mon-assets版）
-Style-BERT-VITS2 (つくよみちゃん) を使用して市場解説音声を生成
+八門遁甲マーケットラジオ音声生成スクリプト（8-mon-assets版）
+VOICEVOX (ずんだもん + 四国めたん) を使用して市場解説音声を生成
 
-音声モデル: つくよみちゃん Style-BERT-VITS2
-- モデル提供: ayousanz (https://huggingface.co/ayousanz/tsukuyomi-chan-style-bert-vits2-model)
-- キャラクター: つくよみちゃん (https://tyc.rei-yumesaki.net/)
-- ライセンス: つくよみちゃんキャラクターライセンス
+音声: VOICEVOX:ずんだもん、VOICEVOX:四国めたん
+- VOICEVOX: https://voicevox.hiroshiba.jp/
+- キャラクター利用規約: https://zunko.jp/con_ongen_kiyaku.html
 """
 import os
+import io
 import json
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
-import tempfile
 import argparse
+from dataclasses import dataclass
 
-# Style-BERT-VITS2
-from style_bert_vits2.nlp import bert_models
-from style_bert_vits2.constants import Languages
-from style_bert_vits2.tts_model import TTSModel
-from huggingface_hub import hf_hub_download
-
-# pydubでWAV→MP3変換
+import requests
 from pydub import AudioSegment
 import numpy as np
-import scipy.io.wavfile as wavfile
 import urllib.request
 import re
 
 # パス設定
 SCRIPT_DIR = Path(__file__).parent
 OUTPUT_DIR = SCRIPT_DIR / "output"
-MODEL_DIR = SCRIPT_DIR / "model_assets"
-AI_CACHE_DIR = SCRIPT_DIR / "ai_cache"
 
-# つくよみちゃん モデルのHugging Face情報
-HF_REPO_ID = "ayousanz/tsukuyomi-chan-style-bert-vits2-model"
-MODEL_FILES = {
-    "model": "tsukuyomi-chan_e200_s5200.safetensors",
-    "config": "config.json",
-    "style": "style_vectors.npy",
+# VOICEVOX設定
+VOICEVOX_URL = os.environ.get("VOICEVOX_URL", "http://localhost:50021")
+SPEAKERS = {
+    "metan": 2,      # 四国めたん（ノーマル）
+    "zundamon": 3,   # ずんだもん（ノーマル）
 }
 
 
-def download_model_files():
-    """Hugging Faceからモデルファイルをダウンロード"""
-    print("Downloading model files from Hugging Face...")
-    MODEL_DIR.mkdir(parents=True, exist_ok=True)
-
-    local_files = {}
-    for key, remote_path in MODEL_FILES.items():
-        print(f"  Downloading {remote_path}...")
-        local_path = hf_hub_download(
-            repo_id=HF_REPO_ID,
-            filename=remote_path,
-            local_dir=MODEL_DIR
-        )
-        local_files[key] = Path(local_path)
-        print(f"    -> {local_path}")
-
-    return local_files
+@dataclass
+class DialogueLine:
+    """対話の1行を表す"""
+    speaker: str  # "metan" or "zundamon"
+    text: str
 
 
-def init_tts_model():
-    """TTSモデルを初期化"""
-    print("Loading BERT model...")
-    bert_models.load_model(Languages.JP, "ku-nlp/deberta-v2-large-japanese-char-wwm")
-    bert_models.load_tokenizer(Languages.JP, "ku-nlp/deberta-v2-large-japanese-char-wwm")
-
-    # モデルファイルをダウンロード
-    files = download_model_files()
-
-    print("Loading TTS model (tsukuyomi-chan)...")
-    model = TTSModel(
-        model_path=files["model"],
-        config_path=files["config"],
-        style_vec_path=files["style"],
-        device="cpu"
+def synthesize_voicevox(text: str, speaker_id: int) -> bytes:
+    """VOICEVOXで音声合成"""
+    # 1. audio_query
+    query_resp = requests.post(
+        f"{VOICEVOX_URL}/audio_query",
+        params={"text": text, "speaker": speaker_id},
+        timeout=30
     )
-    print("Models loaded successfully!")
-    return model
+    query_resp.raise_for_status()
+    query = query_resp.json()
+
+    # 2. synthesis
+    synth_resp = requests.post(
+        f"{VOICEVOX_URL}/synthesis",
+        params={"speaker": speaker_id},
+        json=query,
+        timeout=60
+    )
+    synth_resp.raise_for_status()
+    return synth_resp.content  # WAV bytes
 
 
 def get_jst_time() -> str:
@@ -113,6 +93,7 @@ def normalize_for_tts(text: str) -> str:
         "USD/JPY": "ドル円",
         "NASDAQ": "ナスダック",
         "GOLD": "ゴールド",
+        "臥龍": "がりょう",
     }
     for original, reading in replacements.items():
         text = text.replace(original, reading)
@@ -230,287 +211,482 @@ def fetch_option_oi() -> dict:
         return {}
 
 
-def generate_opening() -> str:
-    """オープニングテキスト生成"""
+# ============================================================
+# 対話台本生成関数
+# ============================================================
+
+def generate_opening() -> list[DialogueLine]:
+    """オープニング"""
     time = get_jst_time()
-    return f"臥龍ラジオ、開演じゃ。現在時刻は{time}。本日の市場を読み解いていくぞ。"
+    return [
+        DialogueLine("metan", f"皆さんこんにちは。八門遁甲マーケットラジオの時間です。"),
+        DialogueLine("zundamon", f"ずんだもんなのだ！今日も一緒に市場を見ていくのだ！"),
+        DialogueLine("metan", f"現在時刻は{time}。本日も日経平均の動きを読み解いていきましょう。"),
+        DialogueLine("zundamon", f"めたんはいつも難しいこと言うから、わかりやすく教えてほしいのだ。"),
+        DialogueLine("metan", f"もちろんです。では早速、市況から見ていきましょうか。"),
+    ]
 
 
-def generate_market_summary(market_data: dict = None, news: list[dict] = None) -> str:
-    """市況サマリー生成（リアルタイムAPI使用）"""
-    try:
-        # APIデータがある場合はそれを使用
-        if market_data and market_data.get("price"):
-            price = market_data.get("price", 0)
-            session = market_data.get("marketSession", "closed")
-            change = market_data.get("change", 0)
-            change_pct = market_data.get("changePercent", 0)
-        else:
-            # フォールバック: data.jsonから取得
-            data = fetch_data_json()
-            if not data:
-                return "市場データを確認中じゃ..."
-            latest = data[-1]
-            price = latest.get("Nikkei_Close", 0)
-            session = "closed"
-            if len(data) >= 2:
-                prev = data[-2].get("Nikkei_Close", price)
-                change = price - prev
-                change_pct = (change / prev) * 100 if prev else 0
-            else:
-                change = 0
-                change_pct = 0
-
-        price_str = format_price_for_tts(price)
-
-        # セッションで現物/先物を切り替え
-        if session == "futures":
-            market_type = "日経先物"
-        else:
-            market_type = "日経平均"
-
-        # 前日比テキスト
-        if change != 0:
-            sign = "プラス" if change >= 0 else "マイナス"
-            change_str = format_price_for_tts(abs(change))
-            text = f"{market_type}は現在{price_str}円。前日比{sign}{change_str}円、{sign}{abs(change_pct):.2f}パーセントで推移しておる。"
-        else:
-            text = f"{market_type}は現在{price_str}円じゃ。"
-
-        # ニュース追加
-        if news:
-            text += "続いて、本日の注目ニュースじゃ。"
-            for i, item in enumerate(news, 1):
-                headline = item.get("headline", "")
-                text += f"{i}件目、{headline}。"
-
-        return text
-    except Exception as e:
-        print(f"  Warning: market-summary error: {e}")
-        return "市場データを確認中じゃ..."
-
-
-def generate_sentiment() -> str:
-    """AIキャッシュまたはintegrated-metricsからセンチメント生成"""
-    # AIコメントを取得（feargreed = センチメント分析）
-    cached = fetch_ai_comment("feargreed")
-    if cached:
-        return cached
-
-    # フォールバック - より詳細な分析
-    try:
-        metrics = fetch_integrated_metrics()
-        cr_data = metrics.get("credit_ratio", {}).get("latest", {})
-        cr = cr_data.get("value", 1.2)
-
-        # Fear & Greed指数の計算（信用倍率ベース）
-        if cr < 0.8:
-            comment = f"信用倍率{cr:.2f}倍。極度の恐怖が市場を支配しておる。大衆が逃げ惑うとき、逆張りの好機が訪れることもある。されど、落ちるナイフを掴むなかれ。"
-        elif cr < 1.0:
-            comment = f"信用倍率{cr:.2f}倍。恐怖が広がっておる。売り手優勢の局面じゃ。悲観の極みは反転の兆しとなることもあるが、時期尚早の判断は禁物じゃ。"
-        elif cr < 1.5:
-            comment = f"信用倍率{cr:.2f}倍。センチメントは均衡状態にある。買い手と売り手が拮抗しておる。次の方向性を見極めるべき局面じゃ。"
-        elif cr < 2.0:
-            comment = f"信用倍率{cr:.2f}倍。楽観ムードが広がりつつある。買い手優勢の局面じゃが、過熱感には注意が必要じゃ。"
-        elif cr < 3.0:
-            comment = f"信用倍率{cr:.2f}倍。強欲が市場を支配しておる。大衆が熱狂するとき、賢者は慎重になる。高値掴みに警戒せよ。"
-        else:
-            comment = f"信用倍率{cr:.2f}倍。極度の強欲状態じゃ。歴史的に見て、このような過熱相場は調整を招くことが多い。利益確定を検討すべき局面かもしれぬ。"
-
-        return comment
-    except Exception as e:
-        print(f"  Warning: sentiment error: {e}")
-        return "センチメントを分析中じゃ..."
-
-
-def generate_volatility() -> str:
-    """AIコメントまたはdata.jsonからボラティリティコメント生成"""
-    # AIコメントを取得
-    cached = fetch_ai_comment("volatility")
-    if cached:
-        return cached
-
-    # フォールバック - 詳細分析
-    try:
+def generate_market_summary(market_data: dict = None, news: list[dict] = None) -> list[DialogueLine]:
+    """市況サマリー"""
+    # APIデータがある場合はそれを使用
+    if market_data and market_data.get("price"):
+        price = market_data.get("price", 0)
+        session = market_data.get("marketSession", "closed")
+        change = market_data.get("change", 0)
+        change_pct = market_data.get("changePercent", 0)
+    else:
+        # フォールバック: data.jsonから取得
         data = fetch_data_json()
-        if len(data) < 6:
-            return "波の動きを見極めよ。"
-
-        prices = [d.get("Nikkei_Close", 0) for d in data[-6:] if d.get("Nikkei_Close")]
-        if len(prices) < 6:
-            return "波の動きを見極めよ。"
-
-        # 日次リターンとボラティリティ計算
-        returns = [(prices[i+1] - prices[i]) / prices[i] for i in range(len(prices)-1)]
-        vol = np.std(returns)
-        vol_annualized = vol * np.sqrt(252) * 100  # 年率換算（%）
-
-        # 最大・最小リターン
-        max_return = max(returns) * 100
-        min_return = min(returns) * 100
-
-        if vol > 0.02:
-            comment = f"5日間のボラティリティは年率換算で{vol_annualized:.1f}パーセント。嵐の予感じゃ。最大変動{max_return:+.1f}パーセント、最小変動{min_return:+.1f}パーセント。荒れ相場では慎重な立ち回りが肝要じゃ。"
-        elif vol > 0.01:
-            comment = f"5日間のボラティリティは年率{vol_annualized:.1f}パーセント。やや波が立っておる。最大{max_return:+.1f}パーセント、最小{min_return:+.1f}パーセントの変動を記録。方向性を見極める局面じゃ。"
-        elif vol < 0.005:
-            comment = f"5日間のボラティリティは年率{vol_annualized:.1f}パーセント。凪の時じゃ。静けさの後には嵐が来ることもある。油断するなかれ。"
+        if not data:
+            return [
+                DialogueLine("metan", "市場データを取得中です。"),
+                DialogueLine("zundamon", "待つのだ！"),
+            ]
+        latest = data[-1]
+        price = latest.get("Nikkei_Close", 0)
+        session = "closed"
+        if len(data) >= 2:
+            prev = data[-2].get("Nikkei_Close", price)
+            change = price - prev
+            change_pct = (change / prev) * 100 if prev else 0
         else:
-            comment = f"5日間のボラティリティは年率{vol_annualized:.1f}パーセント。波は穏やかじゃ。次の大きな動きを待つべし。"
+            change = 0
+            change_pct = 0
 
-        return comment
-    except Exception as e:
-        print(f"  Warning: volatility error: {e}")
-        return "ボラティリティを観測中じゃ..."
+    price_str = format_price_for_tts(price)
+    market_type = "日経先物" if session == "futures" else "日経平均"
+
+    lines = []
+
+    if change > 0:
+        change_str = format_price_for_tts(abs(change))
+        lines = [
+            DialogueLine("zundamon", f"今日の{market_type}はどうなっているのだ？"),
+            DialogueLine("metan", f"{market_type}は現在{price_str}円です。"),
+            DialogueLine("zundamon", f"おお！上がってるのだ？"),
+            DialogueLine("metan", f"はい、前日比プラス{change_str}円、プラス{abs(change_pct):.2f}パーセントで推移しています。"),
+            DialogueLine("zundamon", f"やったのだ！調子いいのだ！"),
+            DialogueLine("metan", f"ただし、上昇相場でも油断は禁物ですよ。"),
+        ]
+    elif change < 0:
+        change_str = format_price_for_tts(abs(change))
+        lines = [
+            DialogueLine("zundamon", f"今日の{market_type}はどうなっているのだ？"),
+            DialogueLine("metan", f"{market_type}は現在{price_str}円です。"),
+            DialogueLine("zundamon", f"えっ、下がってるのだ？"),
+            DialogueLine("metan", f"はい、前日比マイナス{change_str}円、マイナス{abs(change_pct):.2f}パーセントです。"),
+            DialogueLine("zundamon", f"ちょっと心配なのだ。大丈夫なのだ？"),
+            DialogueLine("metan", f"下落局面はチャンスでもあります。冷静に見極めましょう。"),
+        ]
+    else:
+        lines = [
+            DialogueLine("zundamon", f"今日の{market_type}はどうなっているのだ？"),
+            DialogueLine("metan", f"{market_type}は現在{price_str}円。ほぼ横ばいですね。"),
+            DialogueLine("zundamon", f"動きがないのだ？"),
+            DialogueLine("metan", f"静かな相場の後には大きな動きが来ることもあります。注視しましょう。"),
+        ]
+
+    # ニュース追加
+    if news:
+        lines.append(DialogueLine("metan", "続いて、本日の注目ニュースです。"))
+        lines.append(DialogueLine("zundamon", "気になるのだ！教えてほしいのだ！"))
+        for i, item in enumerate(news, 1):
+            headline = item.get("headline", "")
+            lines.append(DialogueLine("metan", f"{i}件目、{headline}"))
+            if i == 1:
+                lines.append(DialogueLine("zundamon", "それは重要なのだ？"))
+                lines.append(DialogueLine("metan", "市場に影響を与える可能性がありますね。"))
+
+    return lines
 
 
-def generate_correlation() -> str:
-    """AIコメントまたはcorrelation-matrixからグローバル相関コメント生成"""
-    # AIコメントを取得
+def generate_sentiment() -> list[DialogueLine]:
+    """センチメント分析"""
+    cached = fetch_ai_comment("feargreed")
+
+    if cached:
+        return [
+            DialogueLine("metan", "次は市場センチメントを見ていきましょう。"),
+            DialogueLine("zundamon", "センチメント？何それなのだ？"),
+            DialogueLine("metan", "市場参加者の心理状態のことです。恐怖が強いか、強欲が強いか。"),
+            DialogueLine("zundamon", "なるほどなのだ！で、今はどうなのだ？"),
+            DialogueLine("metan", cached),
+            DialogueLine("zundamon", "勉強になるのだ！"),
+        ]
+
+    # フォールバック
+    metrics = fetch_integrated_metrics()
+    cr_data = metrics.get("credit_ratio", {}).get("latest", {})
+    cr = cr_data.get("value", 1.2)
+
+    if cr < 0.8:
+        return [
+            DialogueLine("metan", "センチメント分析です。"),
+            DialogueLine("zundamon", "今の市場の雰囲気はどうなのだ？"),
+            DialogueLine("metan", f"信用倍率は{cr:.2f}倍。極度の恐怖状態です。"),
+            DialogueLine("zundamon", f"こ、怖いのだ！"),
+            DialogueLine("metan", f"ただし、大衆が恐怖するときこそ、逆張りの好機という見方もあります。"),
+            DialogueLine("zundamon", f"ピンチはチャンスなのだ？"),
+            DialogueLine("metan", f"ただし落ちるナイフは掴まないこと。タイミングが重要です。"),
+        ]
+    elif cr < 1.0:
+        return [
+            DialogueLine("metan", "センチメント分析です。"),
+            DialogueLine("zundamon", "みんなの気持ちはどうなのだ？"),
+            DialogueLine("metan", f"信用倍率{cr:.2f}倍。恐怖が広がっています。"),
+            DialogueLine("zundamon", f"みんな怖がってるのだ？"),
+            DialogueLine("metan", f"売り手優勢の局面ですね。悲観の極みは反転の兆しになることも。"),
+            DialogueLine("zundamon", f"でも焦っちゃダメなのだ？"),
+            DialogueLine("metan", f"その通り。時期尚早の判断は禁物です。"),
+        ]
+    elif cr < 1.5:
+        return [
+            DialogueLine("metan", "センチメント分析にいきましょう。"),
+            DialogueLine("zundamon", "今の雰囲気は？"),
+            DialogueLine("metan", f"信用倍率{cr:.2f}倍。中立的な状態です。"),
+            DialogueLine("zundamon", f"どっちつかずなのだ？"),
+            DialogueLine("metan", f"買い手と売り手が拮抗しています。次の方向性を見極める局面ですね。"),
+            DialogueLine("zundamon", f"じっと見守るのだ！"),
+        ]
+    elif cr < 2.0:
+        return [
+            DialogueLine("metan", "センチメント分析です。"),
+            DialogueLine("zundamon", "みんな元気なのだ？"),
+            DialogueLine("metan", f"信用倍率{cr:.2f}倍。楽観ムードが広がっています。"),
+            DialogueLine("zundamon", f"いい感じなのだ！"),
+            DialogueLine("metan", f"買い手優勢ですが、過熱感には注意が必要です。"),
+            DialogueLine("zundamon", f"調子に乗りすぎちゃダメなのだ？"),
+            DialogueLine("metan", f"そうですね。冷静さを忘れずに。"),
+        ]
+    elif cr < 3.0:
+        return [
+            DialogueLine("metan", "センチメントを確認しましょう。"),
+            DialogueLine("zundamon", "どうなのだ？"),
+            DialogueLine("metan", f"信用倍率{cr:.2f}倍。強欲モードに入っています。"),
+            DialogueLine("zundamon", f"強欲？なんか怖いのだ。"),
+            DialogueLine("metan", f"大衆が熱狂するとき、賢者は慎重になります。"),
+            DialogueLine("zundamon", f"高値掴みに注意なのだ！"),
+            DialogueLine("metan", f"その通りです。"),
+        ]
+    else:
+        return [
+            DialogueLine("metan", "センチメント分析、重要な局面です。"),
+            DialogueLine("zundamon", "何か大変なのだ？"),
+            DialogueLine("metan", f"信用倍率{cr:.2f}倍。極度の強欲状態です。"),
+            DialogueLine("zundamon", f"えっ！それってやばいのだ？"),
+            DialogueLine("metan", f"歴史的に見て、このような過熱相場は調整を招くことが多いです。"),
+            DialogueLine("zundamon", f"利益確定を考えた方がいいのだ？"),
+            DialogueLine("metan", f"選択肢の一つとして検討すべき局面かもしれません。"),
+        ]
+
+
+def generate_volatility() -> list[DialogueLine]:
+    """ボラティリティ分析"""
+    cached = fetch_ai_comment("volatility")
+
+    if cached:
+        return [
+            DialogueLine("metan", "続いてボラティリティ、つまり値動きの荒さを見ていきます。"),
+            DialogueLine("zundamon", "ボラティリティ？難しい言葉なのだ。"),
+            DialogueLine("metan", "簡単に言うと、相場がどれくらい激しく動いているかです。"),
+            DialogueLine("zundamon", "ジェットコースターみたいなものなのだ？"),
+            DialogueLine("metan", "そんなイメージですね。"),
+            DialogueLine("metan", cached),
+            DialogueLine("zundamon", "わかったのだ！"),
+        ]
+
+    # フォールバック
+    data = fetch_data_json()
+    if len(data) < 6:
+        return [
+            DialogueLine("metan", "ボラティリティのデータを収集中です。"),
+            DialogueLine("zundamon", "待つのだ！"),
+        ]
+
+    prices = [d.get("Nikkei_Close", 0) for d in data[-6:] if d.get("Nikkei_Close")]
+    if len(prices) < 5:
+        return [
+            DialogueLine("metan", "データが不足しています。"),
+            DialogueLine("zundamon", "残念なのだ。"),
+        ]
+
+    returns = [(prices[i+1] - prices[i]) / prices[i] for i in range(len(prices)-1)]
+    vol = np.std(returns)
+    vol_annualized = vol * np.sqrt(252) * 100
+
+    if vol > 0.02:
+        return [
+            DialogueLine("metan", "ボラティリティを確認しましょう。"),
+            DialogueLine("zundamon", "今の相場は荒れてるのだ？"),
+            DialogueLine("metan", f"5日間のボラティリティは年率換算で{vol_annualized:.1f}パーセント。嵐の予感です。"),
+            DialogueLine("zundamon", f"ひええ！荒れてるのだ！"),
+            DialogueLine("metan", f"このような局面では慎重な立ち回りが重要です。"),
+            DialogueLine("zundamon", f"無理しないのだ！"),
+        ]
+    elif vol > 0.01:
+        return [
+            DialogueLine("metan", "ボラティリティを見ていきましょう。"),
+            DialogueLine("zundamon", "波は高いのだ？"),
+            DialogueLine("metan", f"年率{vol_annualized:.1f}パーセント。やや波が立っています。"),
+            DialogueLine("zundamon", f"ちょっと注意が必要なのだ？"),
+            DialogueLine("metan", f"方向性を見極める局面ですね。"),
+        ]
+    elif vol < 0.005:
+        return [
+            DialogueLine("metan", "ボラティリティの確認です。"),
+            DialogueLine("zundamon", "今日は穏やかなのだ？"),
+            DialogueLine("metan", f"年率{vol_annualized:.1f}パーセント。凪の状態です。"),
+            DialogueLine("zundamon", f"平和なのだ！"),
+            DialogueLine("metan", f"ただし、静けさの後には嵐が来ることも。油断は禁物です。"),
+            DialogueLine("zundamon", f"気を抜かないのだ！"),
+        ]
+    else:
+        return [
+            DialogueLine("metan", "ボラティリティです。"),
+            DialogueLine("zundamon", "どうなのだ？"),
+            DialogueLine("metan", f"年率{vol_annualized:.1f}パーセント。波は穏やかです。"),
+            DialogueLine("zundamon", f"落ち着いてるのだ！"),
+            DialogueLine("metan", f"次の大きな動きを待つ局面ですね。"),
+        ]
+
+
+def generate_correlation() -> list[DialogueLine]:
+    """グローバル相関分析"""
     cached = fetch_ai_comment("global-correlation")
+
     if cached:
-        return cached
+        return [
+            DialogueLine("metan", "次はグローバル市場の相関を見ていきます。"),
+            DialogueLine("zundamon", "相関？世界の市場が関係してるのだ？"),
+            DialogueLine("metan", "そうです。日経平均は米国株やドル円など、様々な市場と連動しています。"),
+            DialogueLine("zundamon", "世界は繋がっているのだ！"),
+            DialogueLine("metan", cached),
+            DialogueLine("zundamon", "グローバルな視点が大事なのだ！"),
+        ]
 
     # フォールバック
-    try:
-        corr = fetch_correlation_matrix()
-        matrix = corr.get("matrix", [])
-        if not matrix:
-            return "世界市場の繋がりを見よ。"
+    corr = fetch_correlation_matrix()
+    matrix = corr.get("matrix", [])
 
-        # 最大相関を計算
-        max_corr = 0
-        has_negative = False
-        for i in range(len(matrix)):
-            for j in range(i+1, len(matrix[i])):
-                c = abs(matrix[i][j])
-                if c > max_corr:
-                    max_corr = c
-                if matrix[i][j] < -0.3:
-                    has_negative = True
+    if not matrix:
+        return [
+            DialogueLine("metan", "相関データを取得中です。"),
+            DialogueLine("zundamon", "待つのだ！"),
+        ]
 
-        if max_corr >= 0.7:
-            return "市場の連動性が高い局面じゃ。リスクオンオフの動きに注意せよ。"
-        elif max_corr >= 0.5:
-            if has_negative:
-                return "正負の相関が混在しておる。分散効果を活かす好機かもしれぬ。"
-            return "主要市場は連動傾向にあり。グローバルなトレンドを見よ。"
-        return "相関は穏やかじゃ。各市場の個別要因を見極めよ。"
-    except Exception as e:
-        print(f"  Warning: correlation error: {e}")
-        return "世界市場の繋がりを見よ。"
+    max_corr = 0
+    has_negative = False
+    for i in range(len(matrix)):
+        for j in range(i+1, len(matrix[i])):
+            c = abs(matrix[i][j])
+            if c > max_corr:
+                max_corr = c
+            if matrix[i][j] < -0.3:
+                has_negative = True
+
+    if max_corr >= 0.7:
+        return [
+            DialogueLine("metan", "グローバル相関を確認しましょう。"),
+            DialogueLine("zundamon", "世界の市場はどうなのだ？"),
+            DialogueLine("metan", "市場の連動性が非常に高い局面です。"),
+            DialogueLine("zundamon", "みんな同じ方向に動いてるのだ？"),
+            DialogueLine("metan", "リスクオン・リスクオフの動きに注意が必要です。"),
+            DialogueLine("zundamon", "一緒に上がって一緒に下がるのだ！"),
+        ]
+    elif max_corr >= 0.5:
+        if has_negative:
+            return [
+                DialogueLine("metan", "グローバル相関の確認です。"),
+                DialogueLine("zundamon", "どんな感じなのだ？"),
+                DialogueLine("metan", "正負の相関が混在しています。"),
+                DialogueLine("zundamon", "バラバラなのだ？"),
+                DialogueLine("metan", "分散投資の効果を活かせる局面かもしれません。"),
+                DialogueLine("zundamon", "卵は一つのカゴに盛らないのだ！"),
+            ]
+        return [
+            DialogueLine("metan", "グローバル相関です。"),
+            DialogueLine("zundamon", "繋がりはどうなのだ？"),
+            DialogueLine("metan", "主要市場は連動傾向にあります。"),
+            DialogueLine("zundamon", "グローバルなトレンドを見るのだ！"),
+            DialogueLine("metan", "その通りです。"),
+        ]
+    return [
+        DialogueLine("metan", "グローバル相関を見ていきましょう。"),
+        DialogueLine("zundamon", "世界との繋がりはどうなのだ？"),
+        DialogueLine("metan", "相関は穏やかです。各市場が独自に動いています。"),
+        DialogueLine("zundamon", "それぞれの事情があるのだ！"),
+        DialogueLine("metan", "個別要因を見極めることが大切ですね。"),
+    ]
 
 
-def generate_option() -> str:
-    """AIコメントまたはoption-oi.jsonからオプション分析コメント生成"""
-    # AIコメントを取得（最優先）
+def generate_option() -> list[DialogueLine]:
+    """オプション建玉分析"""
     cached = fetch_ai_comment("option")
+
     if cached:
-        return cached
+        return [
+            DialogueLine("metan", "オプション市場の建玉分析です。"),
+            DialogueLine("zundamon", "オプション？なんか難しそうなのだ。"),
+            DialogueLine("metan", "簡単に言うと、プロ投資家がどこに壁を作っているかがわかります。"),
+            DialogueLine("zundamon", "壁？"),
+            DialogueLine("metan", "上値の抵抗線や下値の支持線のことです。"),
+            DialogueLine("zundamon", "なるほどなのだ！"),
+            DialogueLine("metan", cached),
+            DialogueLine("zundamon", "プロの動きは参考になるのだ！"),
+        ]
 
     # フォールバック
-    try:
-        oi = fetch_option_oi()
-        positions = oi.get("positions", [])
-        anomalies = oi.get("anomalies", [])
-        atm_price = oi.get("atmPrice", 0)
+    oi = fetch_option_oi()
+    positions = oi.get("positions", [])
+    anomalies = oi.get("anomalies", [])
+    atm_price = oi.get("atmPrice", 0)
 
-        if not positions or atm_price == 0:
-            return "建玉データを分析中じゃ。"
+    if not positions or atm_price == 0:
+        return [
+            DialogueLine("metan", "オプション建玉データを取得中です。"),
+            DialogueLine("zundamon", "待つのだ！"),
+        ]
 
-        # PUT/CALLを分離
-        puts = [p for p in positions if p.get("type") == "PUT" and p.get("openInterest", 0) > 0]
-        calls = [p for p in positions if p.get("type") == "CALL" and p.get("openInterest", 0) > 0]
+    puts = [p for p in positions if p.get("type") == "PUT" and p.get("openInterest", 0) > 0]
+    calls = [p for p in positions if p.get("type") == "CALL" and p.get("openInterest", 0) > 0]
 
-        if not puts or not calls:
-            return "建玉データを分析中じゃ。"
+    if not puts or not calls:
+        return [
+            DialogueLine("metan", "建玉データを分析中です。"),
+            DialogueLine("zundamon", "頑張るのだ！"),
+        ]
 
-        # 建玉上位を取得
-        top_puts = sorted(puts, key=lambda x: x.get("openInterest", 0), reverse=True)[:3]
-        top_calls = sorted(calls, key=lambda x: x.get("openInterest", 0), reverse=True)[:3]
+    top_puts = sorted(puts, key=lambda x: x.get("openInterest", 0), reverse=True)[:3]
+    top_calls = sorted(calls, key=lambda x: x.get("openInterest", 0), reverse=True)[:3]
+    top_put = top_puts[0]
+    top_call = top_calls[0]
 
-        top_put = top_puts[0]
-        top_call = top_calls[0]
+    put_distance = atm_price - top_put.get("strike", 0)
+    call_distance = top_call.get("strike", 0) - atm_price
 
-        # ATMからの距離
-        put_distance = atm_price - top_put.get("strike", 0)
-        call_distance = top_call.get("strike", 0) - atm_price
+    lines = [
+        DialogueLine("metan", "オプション建玉を分析していきましょう。"),
+        DialogueLine("zundamon", "プロはどこを見てるのだ？"),
+    ]
 
-        comment_parts = []
+    if put_distance <= 3000 and call_distance <= 3000:
+        lines.extend([
+            DialogueLine("metan", f"プット{top_put['strike']:,}円とコール{top_call['strike']:,}円が近接しています。"),
+            DialogueLine("zundamon", "上も下も壁があるのだ？"),
+            DialogueLine("metan", "拮抗状態ですね。レンジ相場を示唆しています。"),
+        ])
+    elif put_distance <= 3000:
+        lines.extend([
+            DialogueLine("metan", f"プット{top_put['strike']:,}円に大きな建玉があります。"),
+            DialogueLine("zundamon", "下値は守られてるのだ？"),
+            DialogueLine("metan", "下値支持線として機能する可能性があります。"),
+        ])
+    elif call_distance <= 3000:
+        lines.extend([
+            DialogueLine("metan", f"コール{top_call['strike']:,}円に建玉が集中しています。"),
+            DialogueLine("zundamon", "上は重いのだ？"),
+            DialogueLine("metan", "上値抵抗線になる可能性がありますね。"),
+        ])
 
-        # 近接ゾーン分析
-        if put_distance <= 3000 and call_distance <= 3000:
-            comment_parts.append(
-                f"近接ゾーンではプット{top_put['strike']:,}円とコール{top_call['strike']:,}円が拮抗しておる。"
-            )
-        elif put_distance <= 3000:
-            comment_parts.append(
-                f"プット{top_put['strike']:,}円が下値を支える構えじゃ。"
-            )
-        elif call_distance <= 3000:
-            comment_parts.append(
-                f"コール{top_call['strike']:,}円が上値を抑えておる。"
-            )
+    if anomalies:
+        lines.extend([
+            DialogueLine("metan", f"異常検知が{len(anomalies)}件あります。"),
+            DialogueLine("zundamon", "異常！？大丈夫なのだ？"),
+            DialogueLine("metan", "大きな値動きに警戒が必要です。"),
+        ])
+    else:
+        lines.extend([
+            DialogueLine("metan", "異常検知はありません。データは安定しています。"),
+            DialogueLine("zundamon", "安心なのだ！"),
+        ])
 
-        # FOTM分析
-        if put_distance > 5000:
-            comment_parts.append(
-                f"遠方のプット{top_put['strike']:,}円に大量建玉あり。"
-            )
-        if call_distance > 5000:
-            comment_parts.append(
-                f"遠方のコール{top_call['strike']:,}円に建玉集中。"
-            )
+    return lines
 
-        # 異常検知
-        if anomalies:
-            comment_parts.append(
-                f"異常検知{len(anomalies)}件。激しい値動きに警戒せよ。"
-            )
+
+def generate_narrative() -> list[DialogueLine]:
+    """総合考察"""
+    metrics = fetch_integrated_metrics()
+    regime = metrics.get("regime", {}).get("latest", {}).get("regime", "range")
+    cr = metrics.get("credit_ratio", {}).get("latest", {}).get("value", 1.2)
+
+    lines = [
+        DialogueLine("metan", "最後に、総合的な市場判断をお伝えします。"),
+        DialogueLine("zundamon", "まとめなのだ！"),
+    ]
+
+    if regime == "bull":
+        if cr > 2.0:
+            lines.extend([
+                DialogueLine("metan", "現在は強気相場ですが、楽観が過剰になっています。"),
+                DialogueLine("zundamon", "調子に乗りすぎなのだ？"),
+                DialogueLine("metan", "高値掴みには十分注意してください。"),
+                DialogueLine("zundamon", "気をつけるのだ！"),
+            ])
+        elif cr < 1.0:
+            lines.extend([
+                DialogueLine("metan", "上昇トレンドの中に悲観が見られます。"),
+                DialogueLine("zundamon", "上がってるのにみんな怖がってるのだ？"),
+                DialogueLine("metan", "逆張り派にとっては好機かもしれません。"),
+                DialogueLine("zundamon", "チャンスかもなのだ！"),
+            ])
         else:
-            comment_parts.append("異常検知なし。データは安定しておる。")
+            lines.extend([
+                DialogueLine("metan", "順風満帆な相場環境です。"),
+                DialogueLine("zundamon", "やったのだ！いい感じなのだ！"),
+                DialogueLine("metan", "ただし、驕れば足をすくわれます。謙虚にいきましょう。"),
+                DialogueLine("zundamon", "油断大敵なのだ！"),
+            ])
+    elif regime == "bear":
+        if cr < 1.0:
+            lines.extend([
+                DialogueLine("metan", "悲観の極みに達しています。"),
+                DialogueLine("zundamon", "みんな落ち込んでるのだ。"),
+                DialogueLine("metan", "歴史的には、このような局面が反転の好機になることも。"),
+                DialogueLine("zundamon", "夜明け前が一番暗いのだ？"),
+                DialogueLine("metan", "そうですね。ただし、慎重に。"),
+            ])
+        elif cr > 2.0:
+            lines.extend([
+                DialogueLine("metan", "下落相場なのに楽観が見られます。危険な兆候です。"),
+                DialogueLine("zundamon", "えっ、それってまずいのだ？"),
+                DialogueLine("metan", "はい。さらなる下落に注意が必要です。"),
+                DialogueLine("zundamon", "気をつけるのだ。"),
+            ])
+        else:
+            lines.extend([
+                DialogueLine("metan", "冬の時代が続いています。"),
+                DialogueLine("zundamon", "寒いのだ。"),
+                DialogueLine("metan", "耐える覚悟と、次の春に備える準備が必要です。"),
+                DialogueLine("zundamon", "いつか春は来るのだ！"),
+            ])
+    else:
+        lines.extend([
+            DialogueLine("metan", "現在は膠着状態、レンジ相場です。"),
+            DialogueLine("zundamon", "動かないのだ？"),
+            DialogueLine("metan", "次の大きな動きを待つ局面ですね。"),
+            DialogueLine("zundamon", "じっと待つのだ！"),
+        ])
 
-        return "".join(comment_parts) if comment_parts else "オプション建玉の動きを見定めよ。"
-
-    except Exception as e:
-        print(f"  Warning: option error: {e}")
-        return "オプションの動きを読み解くぞ。"
+    return lines
 
 
-def generate_narrative() -> str:
-    """integrated-metricsから総合考察生成"""
-    try:
-        metrics = fetch_integrated_metrics()
-        regime = metrics.get("regime", {}).get("latest", {}).get("regime", "range")
-        cr = metrics.get("credit_ratio", {}).get("latest", {}).get("value", 1.2)
-
-        if regime == "bull":
-            if cr > 2.0:
-                return "強気相場だが楽観過剰じゃ。高値掴みに注意せよ。"
-            if cr < 1.0:
-                return "上昇トレンドに悲観あり。逆張り派の好機かもしれぬ。"
-            return "順風満帆。されど驕るなかれ。"
-        if regime == "bear":
-            if cr < 1.0:
-                return "悲観の極み。歴史は反転の好機を示すが。"
-            if cr > 2.0:
-                return "下落相場に楽観あり。危うい兆候じゃ。"
-            return "冬の時代。耐える覚悟を。"
-        return "膠着状態じゃ。次の一手を待て。"
-    except Exception as e:
-        print(f"  Warning: narrative error: {e}")
-        return "市場を俯瞰しておる..."
-
-
-def generate_closing() -> str:
-    """クロージングテキスト生成"""
-    return "以上、臥龍ラジオでした。投資は自己責任で。引き続きご注意を。"
+def generate_closing() -> list[DialogueLine]:
+    """クロージング"""
+    return [
+        DialogueLine("metan", "以上、八門遁甲マーケットラジオでした。"),
+        DialogueLine("zundamon", "今日も勉強になったのだ！"),
+        DialogueLine("metan", "投資は自己責任で、慎重な判断をお願いします。"),
+        DialogueLine("zundamon", "ちゃんと自分で考えるのだ！"),
+        DialogueLine("metan", "それでは、また次回お会いしましょう。"),
+        DialogueLine("zundamon", "ばいばいなのだ！"),
+    ]
 
 
 # コーナー定義
 CORNERS = [
     ("opening", generate_opening),
-    ("market-summary", generate_market_summary),
+    ("market-summary", None),  # 特別処理
     ("sentiment", generate_sentiment),
     ("volatility", generate_volatility),
     ("correlation", generate_correlation),
@@ -520,60 +696,61 @@ CORNERS = [
 ]
 
 
-def generate_audio(model: TTSModel, text: str, output_path: Path):
-    """Style-BERT-VITS2でテキストを音声化してMP3保存"""
-    # 用語読み替え処理を適用
-    text_normalized = normalize_for_tts(text)
-    # 絵文字を除去（TTSが対応していない場合のため）
-    text_clean = re.sub(r'[\U0001F300-\U0001F9FF]', '', text_normalized)
+def generate_corner_audio(dialogues: list[DialogueLine], output_path: Path):
+    """対話を音声化して1つのMP3に結合"""
+    audio_segments = []
 
-    # 音質改善パラメータ
-    sr, audio = model.infer(
-        text=text_clean,
-        noise=0.4,        # ノイズ軽減
-        noise_w=0.6,      # 発話安定化
-        sdp_ratio=0.2,    # 話速安定化
-        length=1.0,       # 話速（1.0=通常）
-    )
+    for line in dialogues:
+        # テキスト正規化
+        text_clean = normalize_for_tts(line.text)
+        # 絵文字を除去
+        text_clean = re.sub(r'[\U0001F300-\U0001F9FF]', '', text_clean)
 
-    # 一時WAVファイルに保存してからMP3変換
-    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
-        tmp_path = tmp.name
+        if not text_clean.strip():
+            continue
 
-    try:
-        # 音声の正規化（クリッピング防止）
-        max_val = np.abs(audio).max()
-        if max_val > 0:
-            audio = audio / max_val * 0.95  # ピークを95%に正規化
+        print(f"    [{line.speaker}] {text_clean[:40]}...")
 
-        # numpy配列をint16に変換
-        audio_int16 = (audio * 32767).astype(np.int16)
-        wavfile.write(tmp_path, sr, audio_int16)
+        speaker_id = SPEAKERS[line.speaker]
+        wav_bytes = synthesize_voicevox(text_clean, speaker_id)
+        segment = AudioSegment.from_wav(io.BytesIO(wav_bytes))
+        audio_segments.append(segment)
+        # 話者間に200msの無音（自然な間）
+        audio_segments.append(AudioSegment.silent(duration=200))
 
-        # WAV→MP3変換（高品質設定）
-        sound = AudioSegment.from_wav(tmp_path)
-        sound.export(output_path, format="mp3", bitrate="192k")
-    finally:
-        if os.path.exists(tmp_path):
-            os.unlink(tmp_path)
+    # 結合
+    combined = AudioSegment.empty()
+    for seg in audio_segments:
+        combined += seg
+
+    # MP3エクスポート
+    combined.export(output_path, format="mp3", bitrate="192k")
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Generate Garyu Radio audio')
+    parser = argparse.ArgumentParser(description='Generate Garyu Radio audio (VOICEVOX duo)')
     parser.add_argument('--output-dir', type=str, help='Output directory for audio files')
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir) if args.output_dir else OUTPUT_DIR
 
-    print("=== 臥龍ラジオ音声生成開始 ===")
+    print("=== 八門遁甲マーケットラジオ音声生成開始 ===")
+    print(f"  VOICEVOX URL: {VOICEVOX_URL}")
+    print(f"  Output dir: {output_dir}")
+
+    # VOICEVOX接続確認
+    try:
+        version_resp = requests.get(f"{VOICEVOX_URL}/version", timeout=5)
+        print(f"  VOICEVOX version: {version_resp.text}")
+    except Exception as e:
+        print(f"  ERROR: VOICEVOX connection failed: {e}")
+        print("  Please start VOICEVOX engine first.")
+        return
 
     # 市場データとニュースを事前取得
     print("\nFetching market data and news...")
     market_data = fetch_market_live()
     news = fetch_news()
-
-    # TTSモデル初期化
-    model = init_tts_model()
 
     # 出力ディレクトリ作成
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -581,21 +758,22 @@ def main():
     # マニフェスト初期化
     manifest = {
         "generated_at": datetime.utcnow().isoformat() + "Z",
+        "voice": "VOICEVOX:ずんだもん+四国めたん",
         "files": []
     }
 
     # 各コーナーの音声を生成
-    for corner_id, text_func in CORNERS:
+    for corner_id, dialogue_func in CORNERS:
         print(f"\nGenerating {corner_id}...")
+
         # market-summaryは特別処理（市場データとニュースを渡す）
         if corner_id == "market-summary":
-            text = generate_market_summary(market_data, news)
+            dialogues = generate_market_summary(market_data, news)
         else:
-            text = text_func()
-        print(f"  Text: {text[:80]}...")
+            dialogues = dialogue_func()
 
         output_path = output_dir / f"{corner_id}.mp3"
-        generate_audio(model, text, output_path)
+        generate_corner_audio(dialogues, output_path)
 
         file_size = output_path.stat().st_size
         manifest["files"].append({
