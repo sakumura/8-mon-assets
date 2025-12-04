@@ -1,0 +1,54 @@
+name: Generate Radio Audio
+
+on:
+  schedule:
+    # JST = UTC+9
+    # 稼働時間: 9:00 JST〜23:00 JST（1時間間隔、深夜なし）
+    # UTC 00:00 = JST 09:00
+    # UTC 14:00 = JST 23:00
+    - cron: "0 0-13 * * 1-5"   # JST 09:00-22:00 (月〜金、1時間間隔)
+  workflow_dispatch:  # 手動実行
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Free up disk space
+        run: |
+          # 不要なツールを削除してディスク容量を確保
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /usr/local/share/boost
+          df -h
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+
+      - name: Install Python dependencies
+        run: |
+          # CPU版PyTorchを先にインストール（CUDAなしで約700MB節約）
+          pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+          # numpy 1.x系でpyopenjtalkとの互換性を確保
+          pip install "numpy<2.0"
+          pip install style-bert-vits2 pydub scipy huggingface_hub boto3
+
+      - name: Generate audio
+        run: |
+          mkdir -p output
+          python radio/generate_radio_audio.py --output-dir output
+
+      - name: Upload to R2
+        env:
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+        run: python scripts/upload_to_r2.py audio output

@@ -1,0 +1,55 @@
+name: Fetch Smile Curve Data
+
+on:
+  schedule:
+    # JST = UTC+9
+    # 稼働時間: 9:00 JST〜翌6:00 JST（1時間間隔）
+    # UTC 00:00 = JST 09:00
+    # UTC 21:00 = JST 06:00
+    - cron: "0 0-20 * * 1-5"   # JST 09:00-05:00 (月〜金、1時間間隔)
+  workflow_dispatch:  # 手動実行
+
+jobs:
+  fetch-smile-curve:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install playwright boto3
+          playwright install chromium
+
+      - name: Fetch Smile Curve data
+        run: |
+          mkdir -p output
+          python market-data/fetch_smile_curve.py --output-dir output --months 3
+        env:
+          TZ: Asia/Tokyo
+
+      - name: Verify data file exists
+        run: |
+          if [ -f output/smile-curve.json ]; then
+            echo "Smile curve data successfully fetched"
+            python -c "import json; d=json.load(open('output/smile-curve.json')); print(f'Timestamp: {d[\"timestamp\"]}'); print(f'Months: {len(d[\"expiryMonths\"])}')"
+          else
+            echo "Warning: smile-curve.json not created"
+            exit 1
+          fi
+
+      - name: Upload to R2
+        env:
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+        run: |
+          python scripts/upload_to_r2.py data output/smile-curve.json
+          # prev ファイルもアップロード（存在する場合）
+          if [ -f output/smile-curve-prev.json ]; then
+            python scripts/upload_to_r2.py data output/smile-curve-prev.json
+          fi
