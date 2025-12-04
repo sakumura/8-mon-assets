@@ -274,31 +274,36 @@ def fetch_option_oi() -> dict:
 def scrape_google_news_nikkei() -> list[str]:
     """Google Newsから日経関連ニュースをスクレイピング"""
     try:
-        url = "https://news.google.com/rss/search?q=日経平均+OR+日経225+OR+株価&hl=ja&gl=JP&ceid=JP:ja"
+        # URLエンコード済みクエリ（日経平均 OR 日経225 OR 株価）
+        url = "https://news.google.com/rss/search?q=%E6%97%A5%E7%B5%8C%E5%B9%B3%E5%9D%87+OR+%E6%97%A5%E7%B5%8C225+OR+%E6%A0%AA%E4%BE%A1&hl=ja&gl=JP&ceid=JP:ja"
         req = urllib.request.Request(url, headers={"User-Agent": "GaryuRadio/1.0"})
         with urllib.request.urlopen(req, timeout=10) as resp:
             content = resp.read().decode("utf-8")
 
-        # RSS XMLをパース（lxml-xmlが使えない場合はhtml.parserにフォールバック）
+        # RSS XMLをパース（lxml-xmlが使えない場合は正規表現にフォールバック）
         try:
             soup = BeautifulSoup(content, "lxml-xml")
-        except Exception:
-            # フォールバック: 正規表現でタイトル抽出
-            import re
-            titles = re.findall(r'<title>(?:<!\[CDATA\[)?([^<\]]+)(?:\]\]>)?</title>', content)
-            headlines = [t.strip() for t in titles[1:11] if t.strip()]  # 最初はフィード名なのでスキップ
-            print(f"  [Scrape] Fetched {len(headlines)} headlines (regex fallback)")
-            return headlines
+            items = soup.find_all("item")[:10]
+            headlines = []
+            for item in items:
+                title = item.find("title")
+                if title:
+                    headlines.append(title.text.strip())
+            if headlines:
+                print(f"  [Scrape] Fetched {len(headlines)} headlines from Google News (lxml)")
+                return headlines
+        except Exception as e:
+            print(f"  [Scrape] lxml-xml failed: {e}, using regex fallback")
 
-        items = soup.find_all("item")[:10]  # 上位10件
-
+        # フォールバック: 正規表現でタイトル抽出（CDATA対応）
+        titles = re.findall(r'<title>(?:<!\[CDATA\[)?(.*?)(?:\]\]>)?</title>', content, re.DOTALL)
+        # 最初の2件をスキップ（フィードタイトル + "Google ニュース"）
         headlines = []
-        for item in items:
-            title = item.find("title")
-            if title:
-                headlines.append(title.text.strip())
-
-        print(f"  [Scrape] Fetched {len(headlines)} headlines from Google News")
+        for t in titles[2:]:  # 最初の2件をスキップ
+            cleaned = t.strip().replace('\n', ' ')
+            if cleaned and len(headlines) < 10:
+                headlines.append(cleaned)
+        print(f"  [Scrape] Fetched {len(headlines)} headlines (regex fallback)")
         return headlines
     except Exception as e:
         print(f"  Warning: Failed to scrape Google News: {e}")
