@@ -365,20 +365,26 @@ def generate_opening(weather: dict = None) -> list[DialogueLine]:
         DialogueLine("metan", f"本日は{date}、現在時刻は{time}です。"),
     ]
 
-    # 天気情報を追加
+    # 天気情報を追加（自然な会話の流れで）
     if east_weather and west_weather:
         lines.extend([
-            DialogueLine("zundamon", f"今日のお天気はどうなのだ？"),
-            DialogueLine("metan", f"東日本は{east_weather}、西日本は{west_weather}となっています。"),
+            DialogueLine("metan", f"まずは今日のお天気から。東日本は{east_weather}、西日本は{west_weather}となっています。"),
+            DialogueLine("zundamon", f"お出かけの際は気をつけてなのだ！"),
         ])
     elif east_weather:
-        lines.append(DialogueLine("metan", f"今日の東日本は{east_weather}です。"))
+        lines.extend([
+            DialogueLine("metan", f"今日の東日本のお天気は{east_weather}です。"),
+            DialogueLine("zundamon", f"了解なのだ！"),
+        ])
     elif west_weather:
-        lines.append(DialogueLine("metan", f"今日の西日本は{west_weather}です。"))
+        lines.extend([
+            DialogueLine("metan", f"今日の西日本のお天気は{west_weather}です。"),
+            DialogueLine("zundamon", f"了解なのだ！"),
+        ])
 
     lines.extend([
-        DialogueLine("zundamon", f"なるほどなのだ！で、市場はどうなってるのだ？"),
-        DialogueLine("metan", f"では早速、本日の市況から見ていきましょう。"),
+        DialogueLine("zundamon", f"さてさて、今日の市場はどうなってるのだ？"),
+        DialogueLine("metan", f"では早速、本日の市況を見ていきましょう。"),
     ])
 
     return lines
