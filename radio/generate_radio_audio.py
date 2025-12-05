@@ -390,8 +390,14 @@ def generate_opening(weather: dict = None) -> list[DialogueLine]:
     return lines
 
 
-def generate_market_summary(market_data: dict = None, news: list[dict] = None) -> list[DialogueLine]:
-    """市況サマリー"""
+def generate_market_summary(market_data: dict = None, news: list[dict] = None, include_time: bool = False) -> list[DialogueLine]:
+    """市況サマリー
+
+    Args:
+        market_data: 市場データ
+        news: ニュースリスト
+        include_time: 時刻お知らせを含めるか（軽量更新用）
+    """
     # APIデータがある場合はそれを使用
     if market_data and market_data.get("price"):
         price = market_data.get("price", 0)
@@ -422,33 +428,40 @@ def generate_market_summary(market_data: dict = None, news: list[dict] = None) -
 
     lines = []
 
+    # 軽量更新時は時刻お知らせを追加
+    if include_time:
+        time_str = get_jst_time()
+        lines.extend([
+            DialogueLine("metan", f"市況アップデートです。現在時刻は{time_str}。"),
+        ])
+
     if change > 0:
         change_str = format_price_for_tts(abs(change))
-        lines = [
+        lines.extend([
             DialogueLine("zundamon", f"今日の{market_type}はどうなっているのだ？"),
             DialogueLine("metan", f"{market_type}は現在{price_str}円です。"),
             DialogueLine("zundamon", f"おお！上がってるのだ？"),
             DialogueLine("metan", f"はい、前日比プラス{change_str}円、プラス{abs(change_pct):.2f}パーセントで推移しています。"),
             DialogueLine("zundamon", f"やったのだ！調子いいのだ！"),
             DialogueLine("metan", f"ただし、上昇相場でも油断は禁物ですよ。"),
-        ]
+        ])
     elif change < 0:
         change_str = format_price_for_tts(abs(change))
-        lines = [
+        lines.extend([
             DialogueLine("zundamon", f"今日の{market_type}はどうなっているのだ？"),
             DialogueLine("metan", f"{market_type}は現在{price_str}円です。"),
             DialogueLine("zundamon", f"えっ、下がってるのだ？"),
             DialogueLine("metan", f"はい、前日比マイナス{change_str}円、マイナス{abs(change_pct):.2f}パーセントです。"),
             DialogueLine("zundamon", f"ちょっと心配なのだ。大丈夫なのだ？"),
             DialogueLine("metan", f"下落局面はチャンスでもあります。冷静に見極めましょう。"),
-        ]
+        ])
     else:
-        lines = [
+        lines.extend([
             DialogueLine("zundamon", f"今日の{market_type}はどうなっているのだ？"),
             DialogueLine("metan", f"{market_type}は現在{price_str}円。ほぼ横ばいですね。"),
             DialogueLine("zundamon", f"動きがないのだ？"),
             DialogueLine("metan", f"静かな相場の後には大きな動きが来ることもあります。注視しましょう。"),
-        ]
+        ])
 
     # ニュース追加
     if news:
@@ -1051,13 +1064,20 @@ def generate_corner_audio(dialogues: list[DialogueLine], output_path: Path):
 def main():
     parser = argparse.ArgumentParser(description='Generate Garyu Radio audio (VOICEVOX duo)')
     parser.add_argument('--output-dir', type=str, help='Output directory for audio files')
+    parser.add_argument('--corner', type=str, help='Generate only specific corner (e.g., market-summary)')
+    parser.add_argument('--light', action='store_true', help='Light mode: skip AI calls, add time announcement')
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir) if args.output_dir else OUTPUT_DIR
+    is_light_mode = args.light
+    target_corner = args.corner
 
-    print("=== 八門遁甲マーケットラジオ音声生成開始 ===")
+    mode_str = "軽量更新" if is_light_mode else "フル更新"
+    print(f"=== 八門遁甲マーケットラジオ音声生成開始 ({mode_str}) ===")
     print(f"  VOICEVOX URL: {VOICEVOX_URL}")
     print(f"  Output dir: {output_dir}")
+    if target_corner:
+        print(f"  Target corner: {target_corner}")
 
     # VOICEVOX接続確認
     try:
@@ -1069,30 +1089,53 @@ def main():
         return
 
     # 市場データ・ニュース・天気を事前取得
-    print("\nFetching market data, news, and weather...")
+    print("\nFetching market data...")
     market_data = fetch_market_live()
-    news = fetch_news()
-    weather = fetch_weather()
+
+    # 軽量モードではニュース・天気をスキップ
+    if is_light_mode:
+        news = []
+        weather = {}
+        print("  [Light mode] Skipping news and weather fetch")
+    else:
+        print("Fetching news and weather...")
+        news = fetch_news()
+        weather = fetch_weather()
 
     # 出力ディレクトリ作成
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # マニフェスト初期化
-    manifest = {
-        "generated_at": datetime.utcnow().isoformat() + "Z",
-        "voice": "VOICEVOX:ずんだもん+四国めたん",
-        "files": []
-    }
+    # 生成するコーナーを決定
+    if target_corner:
+        corners_to_generate = [(cid, func) for cid, func in CORNERS if cid == target_corner]
+        if not corners_to_generate:
+            print(f"  ERROR: Unknown corner '{target_corner}'")
+            return
+    else:
+        corners_to_generate = CORNERS
+
+    # マニフェスト: 軽量モードでは既存を読み込んで更新
+    manifest_path = output_dir / "audio-manifest.json"
+    if is_light_mode and manifest_path.exists():
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["generated_at"] = datetime.utcnow().isoformat() + "Z"
+    else:
+        manifest = {
+            "generated_at": datetime.utcnow().isoformat() + "Z",
+            "voice": "VOICEVOX:ずんだもん+四国めたん",
+            "files": []
+        }
 
     # 各コーナーの音声を生成
-    for corner_id, dialogue_func in CORNERS:
+    for corner_id, dialogue_func in corners_to_generate:
         print(f"\nGenerating {corner_id}...")
 
         # 特別処理が必要なコーナー
         if corner_id == "opening":
             dialogues = generate_opening(weather)
         elif corner_id == "market-summary":
-            dialogues = generate_market_summary(market_data, news)
+            # 軽量モードでは時刻お知らせ付き、ニュースなし
+            dialogues = generate_market_summary(market_data, news if not is_light_mode else None, include_time=is_light_mode)
         elif corner_id == "market-analysis":
             dialogues = generate_market_analysis(market_data)
         else:
@@ -1102,15 +1145,20 @@ def main():
         generate_corner_audio(dialogues, output_path)
 
         file_size = output_path.stat().st_size
-        manifest["files"].append({
-            "id": corner_id,
-            "path": f"/audio/{corner_id}.mp3",
-            "size": file_size
-        })
+
+        # マニフェスト更新（既存エントリを更新 or 追加）
+        existing_entry = next((f for f in manifest["files"] if f["id"] == corner_id), None)
+        if existing_entry:
+            existing_entry["size"] = file_size
+        else:
+            manifest["files"].append({
+                "id": corner_id,
+                "path": f"/audio/{corner_id}.mp3",
+                "size": file_size
+            })
         print(f"  Saved: {output_path} ({file_size:,} bytes)")
 
     # マニフェスト保存
-    manifest_path = output_dir / "audio-manifest.json"
     manifest_path.write_text(
         json.dumps(manifest, indent=2, ensure_ascii=False),
         encoding="utf-8"

@@ -1,0 +1,109 @@
+name: Generate Radio Audio (Light)
+
+on:
+  schedule:
+    # JST = UTC+9
+    # 取引時間中のみ10分間隔で実行（9:00-15:30 JST = 0:00-6:30 UTC）
+    # 毎時0分はフル更新が走るのでスキップ
+    - cron: "10,20,30,40,50 0-6 * * 1-5"  # JST 09:10-15:50 (月〜金)
+  workflow_dispatch:  # 手動実行
+
+jobs:
+  generate-light:
+    runs-on: ubuntu-latest
+    services:
+      voicevox:
+        image: voicevox/voicevox_engine:cpu-ubuntu20.04-latest
+        ports:
+          - 50021:50021
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+
+      - name: Install Python dependencies
+        run: |
+          pip install requests pydub numpy boto3 beautifulsoup4 lxml
+
+      - name: Wait for VOICEVOX
+        run: |
+          echo "Waiting for VOICEVOX engine..."
+          for i in {1..30}; do
+            if curl -s http://localhost:50021/version > /dev/null; then
+              echo "VOICEVOX is ready!"
+              curl -s http://localhost:50021/version
+              break
+            fi
+            echo "Waiting... ($i/30)"
+            sleep 2
+          done
+
+      - name: Download existing manifest from R2
+        env:
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+        run: |
+          mkdir -p output
+          python -c "
+          import boto3
+          import os
+
+          s3 = boto3.client(
+              's3',
+              endpoint_url=os.environ['R2_ENDPOINT'],
+              aws_access_key_id=os.environ['R2_ACCESS_KEY_ID'],
+              aws_secret_access_key=os.environ['R2_SECRET_ACCESS_KEY'],
+          )
+
+          try:
+              s3.download_file(os.environ['R2_BUCKET'], 'audio/audio-manifest.json', 'output/audio-manifest.json')
+              print('Downloaded existing manifest')
+          except Exception as e:
+              print(f'No existing manifest: {e}')
+          "
+
+      - name: Generate market-summary audio (light mode)
+        run: |
+          python radio/generate_radio_audio.py --output-dir output --corner market-summary --light
+
+      - name: Upload to R2
+        env:
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+        run: |
+          python -c "
+          import boto3
+          import os
+
+          s3 = boto3.client(
+              's3',
+              endpoint_url=os.environ['R2_ENDPOINT'],
+              aws_access_key_id=os.environ['R2_ACCESS_KEY_ID'],
+              aws_secret_access_key=os.environ['R2_SECRET_ACCESS_KEY'],
+          )
+
+          # Upload only market-summary.mp3 and updated manifest
+          files = ['market-summary.mp3', 'audio-manifest.json']
+          for filename in files:
+              local_path = f'output/{filename}'
+              if os.path.exists(local_path):
+                  s3.upload_file(
+                      local_path,
+                      os.environ['R2_BUCKET'],
+                      f'audio/{filename}',
+                      ExtraArgs={'ContentType': 'audio/mpeg' if filename.endswith('.mp3') else 'application/json'}
+                  )
+                  print(f'Uploaded: audio/{filename}')
+          "
