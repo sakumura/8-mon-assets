@@ -243,6 +243,34 @@ def fetch_data_json() -> list:
         return []
 
 
+def fetch_multi_index_live() -> dict:
+    """本番APIから複数指数のリアルタイムデータを取得
+
+    Returns:
+        dict: {symbol: {price, change, changePercent}, ...}
+    """
+    try:
+        req = urllib.request.Request(
+            "https://8-mon.com/api/multi-index-live",
+            headers={"User-Agent": "GaryuRadio/1.0"}
+        )
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            indices = data.get("indices", [])
+            result = {}
+            for idx in indices:
+                result[idx["symbol"]] = {
+                    "price": idx.get("price", 0),
+                    "change": idx.get("change", 0),
+                    "changePercent": idx.get("changePercent", 0),
+                }
+            print(f"  [API] Multi-index: fetched {len(result)} indices")
+            return result
+    except Exception as e:
+        print(f"  Warning: Failed to fetch multi-index data: {e}")
+        return {}
+
+
 def fetch_correlation_matrix() -> dict:
     """本番APIから相関マトリクスを取得"""
     try:
@@ -668,8 +696,8 @@ def generate_volatility() -> list[DialogueLine]:
 
 def generate_correlation() -> list[DialogueLine]:
     """グローバル相関分析（各指数の価格・値動き紹介付き、約2分）"""
-    # data.jsonから各指数の最新データを取得
-    data = fetch_data_json()
+    # multi-index-live APIからリアルタイムデータを取得
+    indices = fetch_multi_index_live()
     cached = fetch_ai_comment("global-correlation")
 
     lines = [
@@ -677,77 +705,52 @@ def generate_correlation() -> list[DialogueLine]:
         DialogueLine("zundamon", "世界の市場はどうなってるのだ？"),
         DialogueLine("metan", "日経平均は単独で動いているわけではありません。米国株、ドル円、ゴールドなど、様々な市場と連動しています。"),
         DialogueLine("zundamon", "世界は繋がっているのだ！"),
-        DialogueLine("metan", "その通りです。では、主要な4指数の動きを順番に見ていきましょう。"),
+        DialogueLine("metan", "その通りです。では、主要指数の動きを順番に見ていきましょう。"),
     ]
 
     # 各指数のデータを取得
-    if len(data) >= 2:
-        latest = data[-1]
-        prev = data[-2]
-
-        # S&P500
-        sp500 = latest.get("SP500_Close", 0)
-        sp500_prev = prev.get("SP500_Close", sp500)
-        sp500_change = ((sp500 - sp500_prev) / sp500_prev * 100) if sp500_prev else 0
-
+    if indices:
         # NASDAQ
-        nasdaq = latest.get("NASDAQ_Close", 0)
-        nasdaq_prev = prev.get("NASDAQ_Close", nasdaq)
-        nasdaq_change = ((nasdaq - nasdaq_prev) / nasdaq_prev * 100) if nasdaq_prev else 0
+        nasdaq_data = indices.get("NASDAQ", {})
+        nasdaq = nasdaq_data.get("price", 0)
+        nasdaq_change = nasdaq_data.get("changePercent", 0)
 
         # USD/JPY
-        usdjpy = latest.get("USDJPY_Close", 0)
-        usdjpy_prev = prev.get("USDJPY_Close", usdjpy)
-        usdjpy_change = ((usdjpy - usdjpy_prev) / usdjpy_prev * 100) if usdjpy_prev else 0
+        usdjpy_data = indices.get("USDJPY", {})
+        usdjpy = usdjpy_data.get("price", 0)
+        usdjpy_change = usdjpy_data.get("changePercent", 0)
 
         # Gold
-        gold = latest.get("Gold_Close", 0)
-        gold_prev = prev.get("Gold_Close", gold)
-        gold_change = ((gold - gold_prev) / gold_prev * 100) if gold_prev else 0
+        gold_data = indices.get("GOLD", {})
+        gold = gold_data.get("price", 0)
+        gold_change = gold_data.get("changePercent", 0)
 
-        # === S&P500 ===
-        lines.extend([
-            DialogueLine("metan", "まずはアメリカのS&P500から。"),
-            DialogueLine("zundamon", "世界最大の株式市場なのだ！"),
-        ])
-        if sp500 > 0:
-            sp500_str = f"{sp500:,.0f}"
-            if sp500_change > 0:
-                lines.extend([
-                    DialogueLine("metan", f"S&P500は現在{sp500_str}ポイント。前日比プラス{abs(sp500_change):.2f}パーセントで上昇しています。"),
-                    DialogueLine("zundamon", "アメリカ強いのだ！"),
-                ])
-            elif sp500_change < 0:
-                lines.extend([
-                    DialogueLine("metan", f"S&P500は現在{sp500_str}ポイント。前日比マイナス{abs(sp500_change):.2f}パーセントで下落しています。"),
-                    DialogueLine("zundamon", "ちょっと弱いのだ。"),
-                ])
-            else:
-                lines.extend([
-                    DialogueLine("metan", f"S&P500は現在{sp500_str}ポイント。ほぼ横ばいで推移しています。"),
-                    DialogueLine("zundamon", "様子見なのだ。"),
-                ])
+        # BTC
+        btc_data = indices.get("BTC", {})
+        btc = btc_data.get("price", 0)
+        btc_change = btc_data.get("changePercent", 0)
 
         # === NASDAQ ===
         lines.extend([
-            DialogueLine("metan", "続いてハイテク株中心のNASDAQ。"),
+            DialogueLine("metan", "まずはハイテク株中心のNASDAQ100から。"),
             DialogueLine("zundamon", "IT企業がいっぱいなのだ！"),
         ])
         if nasdaq > 0:
             nasdaq_str = f"{nasdaq:,.0f}"
             if nasdaq_change > 0:
                 lines.extend([
-                    DialogueLine("metan", f"NASDAQは{nasdaq_str}ポイント。プラス{abs(nasdaq_change):.2f}パーセントです。"),
-                    DialogueLine("zundamon", "ハイテク株も好調なのだ！"),
+                    DialogueLine("metan", f"NASDAQは現在{nasdaq_str}ポイント。前日比プラス{abs(nasdaq_change):.2f}パーセントで上昇しています。"),
+                    DialogueLine("zundamon", "ハイテク株好調なのだ！"),
                 ])
             elif nasdaq_change < 0:
                 lines.extend([
-                    DialogueLine("metan", f"NASDAQは{nasdaq_str}ポイント。マイナス{abs(nasdaq_change):.2f}パーセントです。"),
+                    DialogueLine("metan", f"NASDAQは現在{nasdaq_str}ポイント。前日比マイナス{abs(nasdaq_change):.2f}パーセントで下落しています。"),
                     DialogueLine("zundamon", "ハイテク株は売られてるのだ。"),
                 ])
             else:
                 lines.extend([
-                    DialogueLine("metan", f"NASDAQは{nasdaq_str}ポイント。横ばいですね。"),
+                    DialogueLine("metan", f"NASDAQは{nasdaq_str}ポイント。ほぼ横ばいで推移しています。"),
+                    DialogueLine("zundamon", "様子見なのだ。"),
                 ])
 
         # === ドル円 ===
@@ -798,15 +801,37 @@ def generate_correlation() -> list[DialogueLine]:
                     DialogueLine("metan", f"金価格は1オンス{gold_str}ドル。横ばいです。"),
                 ])
 
+        # === BTC ===
+        if btc > 0:
+            lines.extend([
+                DialogueLine("metan", "おまけにビットコインも見ておきましょう。"),
+                DialogueLine("zundamon", "暗号資産なのだ！"),
+            ])
+            btc_str = f"{btc:,.0f}"
+            if btc_change > 0:
+                lines.extend([
+                    DialogueLine("metan", f"ビットコインは{btc_str}ドル。プラス{abs(btc_change):.2f}パーセントです。"),
+                    DialogueLine("zundamon", "暗号資産も元気なのだ！"),
+                ])
+            elif btc_change < 0:
+                lines.extend([
+                    DialogueLine("metan", f"ビットコインは{btc_str}ドル。マイナス{abs(btc_change):.2f}パーセントです。"),
+                    DialogueLine("zundamon", "ちょっと下がってるのだ。"),
+                ])
+            else:
+                lines.extend([
+                    DialogueLine("metan", f"ビットコインは{btc_str}ドル。横ばいです。"),
+                ])
+
         # === 相関分析の総括 ===
         lines.extend([
             DialogueLine("zundamon", "いろんな市場が動いてるのだ！"),
             DialogueLine("metan", "そうですね。これらの市場は互いに影響し合っています。"),
         ])
 
-        # 簡易的な市場センチメント判定
-        stock_positive = (sp500_change > 0) and (nasdaq_change > 0)
-        stock_negative = (sp500_change < 0) and (nasdaq_change < 0)
+        # 簡易的な市場センチメント判定（NASDAQベース）
+        stock_positive = nasdaq_change > 0
+        stock_negative = nasdaq_change < 0
         yen_weak = usdjpy_change > 0
         gold_up = gold_change > 0
 
