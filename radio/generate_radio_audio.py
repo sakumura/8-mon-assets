@@ -550,55 +550,20 @@ def generate_sentiment() -> list[DialogueLine]:
     if percentile <= 20:
         lines.append(DialogueLine("zundamon", "パーセンタイル20以下！かなり低いのだ！"))
         lines.append(DialogueLine("metan", "そうですね。過去データの中でも下位20パーセントに入る悲観的な水準です。"))
+        lines.append(DialogueLine("metan", "売り手が多く、市場は慎重な姿勢ですね。"))
     elif percentile <= 40:
         lines.append(DialogueLine("zundamon", "やや低めなのだ？"))
-        lines.append(DialogueLine("metan", "平均より悲観寄りですね。売り手が多い状況です。"))
+        lines.append(DialogueLine("metan", "平均より悲観寄りですね。売り手がやや優勢な状況です。"))
     elif percentile <= 60:
         lines.append(DialogueLine("zundamon", "真ん中あたりなのだ！"))
         lines.append(DialogueLine("metan", "過去の平均的な水準ですね。特に偏りはありません。"))
     elif percentile <= 80:
         lines.append(DialogueLine("zundamon", "やや高めなのだ？"))
-        lines.append(DialogueLine("metan", "楽観寄りですね。買い手が多い状況です。"))
+        lines.append(DialogueLine("metan", "楽観寄りですね。買い手がやや優勢な状況です。"))
     else:
         lines.append(DialogueLine("zundamon", "パーセンタイル80超え！かなり高いのだ！"))
         lines.append(DialogueLine("metan", "過去データの中でも上位20パーセントに入る強気な水準です。"))
-
-    # === 評価損益の推定解説 ===
-    lines.extend([
-        DialogueLine("zundamon", "買い残が多いと何がわかるのだ？"),
-        DialogueLine("metan", "実は、信用買いをしている人たちの含み損益が推定できるんです。"),
-        DialogueLine("zundamon", "え！そんなことわかるのだ？"),
-    ])
-
-    # 買い残の評価損益状況を推定（倍率から推測）
-    if cr > 2.0:
-        lines.extend([
-            DialogueLine("metan", "信用倍率が2倍を超えているということは、買い残が売り残の2倍以上あるということ。"),
-            DialogueLine("metan", "多くの個人投資家が強気で買いポジションを持っています。"),
-            DialogueLine("zundamon", "みんな儲かってるのだ？"),
-            DialogueLine("metan", "相場が上がっていれば含み益ですが、ここから下がると一斉に含み損になるリスクがあります。"),
-            DialogueLine("zundamon", "なるほど。高値掴みに注意なのだ！"),
-        ])
-    elif cr > 1.5:
-        lines.extend([
-            DialogueLine("metan", "買い手優勢の状況ですね。"),
-            DialogueLine("metan", "相場が上がれば買い残は含み益、下がれば含み損になります。"),
-            DialogueLine("zundamon", "上がってほしいのだ！"),
-        ])
-    elif cr > 1.0:
-        lines.extend([
-            DialogueLine("metan", "買い手と売り手がほぼ拮抗しています。"),
-            DialogueLine("zundamon", "どっちが勝つかわからないのだ。"),
-            DialogueLine("metan", "そうですね。次の材料で方向感が決まる局面です。"),
-        ])
-    else:
-        lines.extend([
-            DialogueLine("metan", "信用倍率1倍未満は、売り残が買い残より多い状況です。"),
-            DialogueLine("zundamon", "みんな下がると思ってるのだ？"),
-            DialogueLine("metan", "悲観的な見方が多いですね。ただし、売り残は将来の買い戻し需要でもあります。"),
-            DialogueLine("zundamon", "踏み上げってやつなのだ？"),
-            DialogueLine("metan", "その通り。相場が上がり始めると、売り方の買い戻しで上昇が加速することがあります。"),
-        ])
+        lines.append(DialogueLine("metan", "買い手が多く、市場は楽観的な姿勢ですね。"))
 
     # === AIコメント ===
     if cached:
@@ -683,72 +648,190 @@ def generate_volatility() -> list[DialogueLine]:
 
 
 def generate_correlation() -> list[DialogueLine]:
-    """グローバル相関分析"""
+    """グローバル相関分析（各指数の価格・値動き紹介付き、約2分）"""
+    # data.jsonから各指数の最新データを取得
+    data = fetch_data_json()
     cached = fetch_ai_comment("global-correlation")
 
-    if cached:
-        return [
-            DialogueLine("metan", "次はグローバル市場の相関を見ていきます。"),
-            DialogueLine("zundamon", "相関？世界の市場が関係してるのだ？"),
-            DialogueLine("metan", "そうです。日経平均は米国株やドル円など、様々な市場と連動しています。"),
-            DialogueLine("zundamon", "世界は繋がっているのだ！"),
-            DialogueLine("metan", cached),
-            DialogueLine("zundamon", "グローバルな視点が大事なのだ！"),
-        ]
-
-    # フォールバック
-    corr = fetch_correlation_matrix()
-    matrix = corr.get("matrix", [])
-
-    if not matrix:
-        return [
-            DialogueLine("metan", "相関データを取得中です。"),
-            DialogueLine("zundamon", "待つのだ！"),
-        ]
-
-    max_corr = 0
-    has_negative = False
-    for i in range(len(matrix)):
-        for j in range(i+1, len(matrix[i])):
-            c = abs(matrix[i][j])
-            if c > max_corr:
-                max_corr = c
-            if matrix[i][j] < -0.3:
-                has_negative = True
-
-    if max_corr >= 0.7:
-        return [
-            DialogueLine("metan", "グローバル相関を確認しましょう。"),
-            DialogueLine("zundamon", "世界の市場はどうなのだ？"),
-            DialogueLine("metan", "市場の連動性が非常に高い局面です。"),
-            DialogueLine("zundamon", "みんな同じ方向に動いてるのだ？"),
-            DialogueLine("metan", "リスクオン・リスクオフの動きに注意が必要です。"),
-            DialogueLine("zundamon", "一緒に上がって一緒に下がるのだ！"),
-        ]
-    elif max_corr >= 0.5:
-        if has_negative:
-            return [
-                DialogueLine("metan", "グローバル相関の確認です。"),
-                DialogueLine("zundamon", "どんな感じなのだ？"),
-                DialogueLine("metan", "正負の相関が混在しています。"),
-                DialogueLine("zundamon", "バラバラなのだ？"),
-                DialogueLine("metan", "分散投資の効果を活かせる局面かもしれません。"),
-                DialogueLine("zundamon", "卵は一つのカゴに盛らないのだ！"),
-            ]
-        return [
-            DialogueLine("metan", "グローバル相関です。"),
-            DialogueLine("zundamon", "繋がりはどうなのだ？"),
-            DialogueLine("metan", "主要市場は連動傾向にあります。"),
-            DialogueLine("zundamon", "グローバルなトレンドを見るのだ！"),
-            DialogueLine("metan", "その通りです。"),
-        ]
-    return [
-        DialogueLine("metan", "グローバル相関を見ていきましょう。"),
-        DialogueLine("zundamon", "世界との繋がりはどうなのだ？"),
-        DialogueLine("metan", "相関は穏やかです。各市場が独自に動いています。"),
-        DialogueLine("zundamon", "それぞれの事情があるのだ！"),
-        DialogueLine("metan", "個別要因を見極めることが大切ですね。"),
+    lines = [
+        DialogueLine("metan", "次はグローバル市場の動向を見ていきましょう。"),
+        DialogueLine("zundamon", "世界の市場はどうなってるのだ？"),
+        DialogueLine("metan", "日経平均は単独で動いているわけではありません。米国株、ドル円、ゴールドなど、様々な市場と連動しています。"),
+        DialogueLine("zundamon", "世界は繋がっているのだ！"),
+        DialogueLine("metan", "その通りです。では、主要な4指数の動きを順番に見ていきましょう。"),
     ]
+
+    # 各指数のデータを取得
+    if len(data) >= 2:
+        latest = data[-1]
+        prev = data[-2]
+
+        # S&P500
+        sp500 = latest.get("SP500_Close", 0)
+        sp500_prev = prev.get("SP500_Close", sp500)
+        sp500_change = ((sp500 - sp500_prev) / sp500_prev * 100) if sp500_prev else 0
+
+        # NASDAQ
+        nasdaq = latest.get("NASDAQ_Close", 0)
+        nasdaq_prev = prev.get("NASDAQ_Close", nasdaq)
+        nasdaq_change = ((nasdaq - nasdaq_prev) / nasdaq_prev * 100) if nasdaq_prev else 0
+
+        # USD/JPY
+        usdjpy = latest.get("USDJPY_Close", 0)
+        usdjpy_prev = prev.get("USDJPY_Close", usdjpy)
+        usdjpy_change = ((usdjpy - usdjpy_prev) / usdjpy_prev * 100) if usdjpy_prev else 0
+
+        # Gold
+        gold = latest.get("Gold_Close", 0)
+        gold_prev = prev.get("Gold_Close", gold)
+        gold_change = ((gold - gold_prev) / gold_prev * 100) if gold_prev else 0
+
+        # === S&P500 ===
+        lines.extend([
+            DialogueLine("metan", "まずはアメリカのS&P500から。"),
+            DialogueLine("zundamon", "世界最大の株式市場なのだ！"),
+        ])
+        if sp500 > 0:
+            sp500_str = f"{sp500:,.0f}"
+            if sp500_change > 0:
+                lines.extend([
+                    DialogueLine("metan", f"S&P500は現在{sp500_str}ポイント。前日比プラス{abs(sp500_change):.2f}パーセントで上昇しています。"),
+                    DialogueLine("zundamon", "アメリカ強いのだ！"),
+                ])
+            elif sp500_change < 0:
+                lines.extend([
+                    DialogueLine("metan", f"S&P500は現在{sp500_str}ポイント。前日比マイナス{abs(sp500_change):.2f}パーセントで下落しています。"),
+                    DialogueLine("zundamon", "ちょっと弱いのだ。"),
+                ])
+            else:
+                lines.extend([
+                    DialogueLine("metan", f"S&P500は現在{sp500_str}ポイント。ほぼ横ばいで推移しています。"),
+                    DialogueLine("zundamon", "様子見なのだ。"),
+                ])
+
+        # === NASDAQ ===
+        lines.extend([
+            DialogueLine("metan", "続いてハイテク株中心のNASDAQ。"),
+            DialogueLine("zundamon", "IT企業がいっぱいなのだ！"),
+        ])
+        if nasdaq > 0:
+            nasdaq_str = f"{nasdaq:,.0f}"
+            if nasdaq_change > 0:
+                lines.extend([
+                    DialogueLine("metan", f"NASDAQは{nasdaq_str}ポイント。プラス{abs(nasdaq_change):.2f}パーセントです。"),
+                    DialogueLine("zundamon", "ハイテク株も好調なのだ！"),
+                ])
+            elif nasdaq_change < 0:
+                lines.extend([
+                    DialogueLine("metan", f"NASDAQは{nasdaq_str}ポイント。マイナス{abs(nasdaq_change):.2f}パーセントです。"),
+                    DialogueLine("zundamon", "ハイテク株は売られてるのだ。"),
+                ])
+            else:
+                lines.extend([
+                    DialogueLine("metan", f"NASDAQは{nasdaq_str}ポイント。横ばいですね。"),
+                ])
+
+        # === ドル円 ===
+        lines.extend([
+            DialogueLine("metan", "次は為替、ドル円を見ましょう。"),
+            DialogueLine("zundamon", "円安か円高か気になるのだ！"),
+        ])
+        if usdjpy > 0:
+            usdjpy_str = f"{usdjpy:.2f}"
+            if usdjpy_change > 0:
+                lines.extend([
+                    DialogueLine("metan", f"ドル円は1ドル{usdjpy_str}円。前日比プラス{abs(usdjpy_change):.2f}パーセント、つまり円安方向に動いています。"),
+                    DialogueLine("zundamon", "円が安くなってるのだ！"),
+                    DialogueLine("metan", "円安は輸出企業にはプラス、輸入コストにはマイナスですね。"),
+                ])
+            elif usdjpy_change < 0:
+                lines.extend([
+                    DialogueLine("metan", f"ドル円は1ドル{usdjpy_str}円。前日比マイナス{abs(usdjpy_change):.2f}パーセント、円高方向です。"),
+                    DialogueLine("zundamon", "円が強くなってるのだ！"),
+                    DialogueLine("metan", "円高は輸入企業にはプラス、輸出企業にはマイナスですね。"),
+                ])
+            else:
+                lines.extend([
+                    DialogueLine("metan", f"ドル円は1ドル{usdjpy_str}円。ほぼ変わらずです。"),
+                ])
+
+        # === ゴールド ===
+        lines.extend([
+            DialogueLine("metan", "最後に安全資産の代表、ゴールドです。"),
+            DialogueLine("zundamon", "金は有事の時に強いって聞くのだ！"),
+        ])
+        if gold > 0:
+            gold_str = f"{gold:,.0f}"
+            if gold_change > 0:
+                lines.extend([
+                    DialogueLine("metan", f"金価格は1オンス{gold_str}ドル。プラス{abs(gold_change):.2f}パーセントで上昇しています。"),
+                    DialogueLine("zundamon", "金が買われてるのだ！"),
+                    DialogueLine("metan", "リスク回避の動きか、インフレヘッジの需要かもしれませんね。"),
+                ])
+            elif gold_change < 0:
+                lines.extend([
+                    DialogueLine("metan", f"金価格は1オンス{gold_str}ドル。マイナス{abs(gold_change):.2f}パーセントで下落しています。"),
+                    DialogueLine("zundamon", "金より株が人気なのだ？"),
+                    DialogueLine("metan", "リスクオンの局面では金から資金が流出することがあります。"),
+                ])
+            else:
+                lines.extend([
+                    DialogueLine("metan", f"金価格は1オンス{gold_str}ドル。横ばいです。"),
+                ])
+
+        # === 相関分析の総括 ===
+        lines.extend([
+            DialogueLine("zundamon", "いろんな市場が動いてるのだ！"),
+            DialogueLine("metan", "そうですね。これらの市場は互いに影響し合っています。"),
+        ])
+
+        # 簡易的な市場センチメント判定
+        stock_positive = (sp500_change > 0) and (nasdaq_change > 0)
+        stock_negative = (sp500_change < 0) and (nasdaq_change < 0)
+        yen_weak = usdjpy_change > 0
+        gold_up = gold_change > 0
+
+        if stock_positive and yen_weak:
+            lines.extend([
+                DialogueLine("metan", "米国株高と円安が同時に起きています。典型的なリスクオンの展開ですね。"),
+                DialogueLine("zundamon", "みんな強気なのだ！"),
+                DialogueLine("metan", "日経平均にも追い風となりやすい環境です。"),
+            ])
+        elif stock_negative and gold_up:
+            lines.extend([
+                DialogueLine("metan", "株安と金高が同時に起きています。リスク回避の動きが見られますね。"),
+                DialogueLine("zundamon", "ちょっと心配なのだ。"),
+                DialogueLine("metan", "こういう時は慎重な立ち回りが大切です。"),
+            ])
+        elif stock_positive and gold_up:
+            lines.extend([
+                DialogueLine("metan", "株も金も上昇しています。流動性相場の様相ですね。"),
+                DialogueLine("zundamon", "お金がいっぱい回ってるのだ？"),
+                DialogueLine("metan", "金融緩和期待や余剰資金が市場に流入しているのかもしれません。"),
+            ])
+        else:
+            lines.extend([
+                DialogueLine("metan", "各市場がまちまちの動きをしています。"),
+                DialogueLine("zundamon", "方向感がないのだ？"),
+                DialogueLine("metan", "個別の材料で動いている局面ですね。"),
+            ])
+
+    else:
+        lines.extend([
+            DialogueLine("metan", "グローバル市場のデータを取得中です。"),
+            DialogueLine("zundamon", "待つのだ！"),
+        ])
+
+    # AIコメント追加
+    if cached:
+        lines.extend([
+            DialogueLine("metan", "それでは臥龍ちゃんの相関分析です。"),
+            DialogueLine("metan", cached),
+        ])
+
+    lines.append(DialogueLine("zundamon", "グローバルな視点で見ることが大事なのだ！"))
+
+    return lines
 
 
 def generate_option() -> list[DialogueLine]:
