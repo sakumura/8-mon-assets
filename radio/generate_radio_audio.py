@@ -185,10 +185,11 @@ def fetch_news() -> list[dict]:
         )
         with urllib.request.urlopen(req, timeout=10) as resp:
             data = json.loads(resp.read().decode("utf-8"))
-            # 重要度3以上の上位3件
+            # 上位3件を取得（AI評価がフォールバックしている場合も対応）
             news = data.get("news", [])
-            filtered = [n for n in news if n.get("importance", 0) >= 3][:3]
-            print(f"  [API] News: {len(filtered)} items (importance >= 3)")
+            # 重要度順にソートされているので上位3件を取得
+            filtered = news[:3]
+            print(f"  [API] News: {len(filtered)} items")
             return filtered
     except Exception as e:
         print(f"  Warning: Failed to fetch news: {e}")
