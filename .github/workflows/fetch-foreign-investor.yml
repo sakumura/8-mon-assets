@@ -1,0 +1,50 @@
+name: Fetch Foreign Investor Flow Data
+
+on:
+  schedule:
+    # 財務省データは毎週木曜日に更新
+    # JST 木曜 18:00 = UTC 木曜 09:00
+    - cron: "0 9 * * 4"  # 毎週木曜 18:00 JST
+    # 金曜にも念のため実行（木曜にデータ更新が遅れた場合）
+    - cron: "0 9 * * 5"  # 毎週金曜 18:00 JST
+  workflow_dispatch:  # 手動実行
+
+jobs:
+  fetch-foreign-investor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install pandas numpy requests boto3
+
+      - name: Fetch Foreign Investor data
+        run: |
+          mkdir -p output
+          python market-data/fetch_foreign_investor.py --output-dir output
+        env:
+          TZ: Asia/Tokyo
+
+      - name: Verify data file exists
+        run: |
+          if [ -f output/foreign-investor.json ]; then
+            echo "Foreign investor data successfully fetched"
+            python -c "import json; d=json.load(open('output/foreign-investor.json')); print(f'Generated: {d[\"generated_at\"]}'); print(f'Latest: {d[\"weekly\"][\"latest\"][\"date\"]} - {d[\"weekly\"][\"latest\"][\"net_billion\"]:.0f}億円')"
+          else
+            echo "Warning: foreign-investor.json not created"
+            exit 1
+          fi
+
+      - name: Upload to R2
+        env:
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+        run: |
+          python scripts/upload_to_r2.py data output/foreign-investor.json
