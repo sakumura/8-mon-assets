@@ -537,11 +537,11 @@ def generate_output(weekly_data: list[dict], monthly_data: list[dict], lead_lag:
             'latest': {
                 'date': latest['date'] if latest else None,
                 'net': latest['net'] if latest else 0,
-                'net_billion': round(latest['net'] / 100, 0) if latest else 0,  # 億円単位
-                'percentile': calculate_percentile(latest['net'], weekly_data) if latest else 50
+                'net_billion': round(latest['net'], 0) if latest else 0,  # 億円単位（netは既に億円）
+                'percentile': calculate_percentile(latest['net'], recent_weekly) if latest else 50
             },
             'cumulative_52w': calculate_cumulative(weekly_data, 52),
-            'stats': calculate_statistics(weekly_data)
+            'stats': calculate_statistics(recent_weekly)
         },
         'monthly': {
             'data': monthly_data[-24:] if len(monthly_data) >= 24 else monthly_data,  # 直近24ヶ月
@@ -610,7 +610,7 @@ def main():
     print(f"Weekly data points: {len(output['weekly']['data'])}")
     if output['weekly']['latest']['date']:
         print(f"Latest: {output['weekly']['latest']['date']} - {output['weekly']['latest']['net_billion']:.0f}億円 (P{output['weekly']['latest']['percentile']:.0f})")
-    print(f"52-week cumulative: {output['weekly']['cumulative_52w'] / 100:.0f}億円")
+    print(f"52-week cumulative: {output['weekly']['cumulative_52w']:.0f}億円")
     print(f"Lead-lag: {output['lead_lag']['interpretation']}")
 
     return 0
