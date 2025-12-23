@@ -1,0 +1,119 @@
+name: Generate Newsletter Audio
+
+on:
+  # 夜版: JST 21:30 (UTC 12:30) - 市場閉場後
+  # 朝版: JST 07:30 (UTC 22:30前日) - 市場開場前
+  # 昼版: JST 12:30 (UTC 03:30) - 前場終了後
+  schedule:
+    - cron: "30 12 * * 1-5"   # JST 21:30 (月〜金) - 夜版
+    - cron: "30 22 * * 0-4"   # JST 07:30 (火〜土の朝 = 月〜金の夜) - 朝版
+    - cron: "30 3 * * 1-5"    # JST 12:30 (月〜金) - 昼版
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Newsletter version (night/morning/lunch/auto)'
+        required: false
+        default: 'auto'
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    services:
+      voicevox:
+        image: voicevox/voicevox_engine:cpu-ubuntu20.04-latest
+        ports:
+          - 50021:50021
+
+    steps:
+      - name: Free up disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /usr/local/share/boost
+          df -h
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+
+      - name: Install Python dependencies
+        run: |
+          pip install requests pydub boto3
+
+      - name: Wait for VOICEVOX
+        run: |
+          echo "Waiting for VOICEVOX engine..."
+          for i in {1..30}; do
+            if curl -s http://localhost:50021/version > /dev/null; then
+              echo "VOICEVOX is ready!"
+              curl -s http://localhost:50021/version
+              break
+            fi
+            echo "Waiting... ($i/30)"
+            sleep 2
+          done
+
+      - name: Determine newsletter version
+        id: version
+        run: |
+          if [ "${{ github.event.inputs.version }}" != "" ] && [ "${{ github.event.inputs.version }}" != "auto" ]; then
+            echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            # JST時刻で判定
+            HOUR=$(TZ=Asia/Tokyo date +%H)
+            if [ $HOUR -ge 15 ] || [ $HOUR -lt 6 ]; then
+              echo "version=night" >> $GITHUB_OUTPUT
+            elif [ $HOUR -ge 6 ] && [ $HOUR -lt 10 ]; then
+              echo "version=morning" >> $GITHUB_OUTPUT
+            else
+              echo "version=lunch" >> $GITHUB_OUTPUT
+            fi
+          fi
+          echo "Selected version: $(cat $GITHUB_OUTPUT | grep version | cut -d= -f2)"
+
+      - name: Download latest newsletter from 8-mon
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          DATE=$(TZ=Asia/Tokyo date +%Y-%m-%d)
+          NEWSLETTER_URL="https://8-mon.com/newsletter/${VERSION}_${DATE}.txt"
+
+          echo "Downloading: $NEWSLETTER_URL"
+          mkdir -p input
+
+          # ダウンロード試行（当日分）
+          if curl -sf "$NEWSLETTER_URL" -o "input/${VERSION}_${DATE}.txt"; then
+            echo "Downloaded: ${VERSION}_${DATE}.txt"
+          else
+            # 前日分を試行
+            YESTERDAY=$(TZ=Asia/Tokyo date -d "yesterday" +%Y-%m-%d)
+            NEWSLETTER_URL="https://8-mon.com/newsletter/${VERSION}_${YESTERDAY}.txt"
+            echo "Trying previous day: $NEWSLETTER_URL"
+            if curl -sf "$NEWSLETTER_URL" -o "input/${VERSION}_${YESTERDAY}.txt"; then
+              echo "Downloaded: ${VERSION}_${YESTERDAY}.txt"
+            else
+              echo "ERROR: Newsletter not found"
+              exit 1
+            fi
+          fi
+
+          ls -la input/
+
+      - name: Generate audio
+        run: |
+          mkdir -p output/newsletter
+          python newsletter/newsletter_to_audio.py input/*.txt --output-dir output/newsletter
+
+      - name: Upload to R2
+        env:
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+        run: python newsletter/upload_newsletter_audio.py output/newsletter/*.mp3
