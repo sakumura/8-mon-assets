@@ -105,6 +105,17 @@ jobs:
 
           ls -la input/
 
+      - name: Debug newsletter content
+        run: |
+          echo "=== File info ==="
+          file input/*.txt
+          echo ""
+          echo "=== First 20 lines ==="
+          head -20 input/*.txt
+          echo ""
+          echo "=== Lines with ■ ==="
+          grep -n "■" input/*.txt || echo "No ■ found!"
+
       - name: Generate audio
         run: |
           mkdir -p output/newsletter
