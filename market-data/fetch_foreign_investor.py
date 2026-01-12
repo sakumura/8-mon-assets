@@ -312,9 +312,9 @@ def parse_monthly_data(df: pd.DataFrame) -> list[dict]:
 
 
 def load_nikkei_data() -> pd.DataFrame | None:
-    """日経225データを読み込む"""
+    """日経225データを読み込む（ローカル優先、R2フォールバック）"""
     try:
-        # 複数のパスを試行
+        # 1. ローカルファイルを試行
         paths_to_try = [
             NIKKEI_DATA_PATH,
             Path(__file__).parent.parent.parent / "8-mon" / "frontend" / "public" / "data.json",
@@ -331,7 +331,18 @@ def load_nikkei_data() -> pd.DataFrame | None:
                 logging.info(f"Loaded Nikkei data from {path}: {len(df)} records")
                 return df
 
-        logging.warning("Nikkei data file not found")
+        # 2. R2からフェッチ（GitHub Actions環境用）
+        logging.info("Local file not found, fetching from R2...")
+        r2_url = "https://r2.8-mon.com/data.json"
+        response = requests.get(r2_url, timeout=30)
+        if response.ok:
+            data = response.json()
+            df = pd.DataFrame(data)
+            df['Date'] = pd.to_datetime(df['Date'])
+            logging.info(f"Loaded Nikkei data from R2: {len(df)} records")
+            return df
+
+        logging.warning("Nikkei data not available from local or R2")
         return None
 
     except Exception as e:
