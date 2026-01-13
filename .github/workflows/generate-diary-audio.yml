@@ -1,0 +1,125 @@
+name: Generate Diary Audio
+
+on:
+  # 8-monからのrepository_dispatchで即時トリガー
+  repository_dispatch:
+    types: [diary-updated]
+
+  # 手動実行
+  workflow_dispatch:
+    inputs:
+      date:
+        description: 'Diary date (YYYY-MM-DD). Default: today'
+        required: false
+      time_slot:
+        description: 'Time slot (morning/noon/evening/night/auto)'
+        required: false
+        default: 'auto'
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    services:
+      voicevox:
+        image: voicevox/voicevox_engine:cpu-ubuntu20.04-latest
+        ports:
+          - 50021:50021
+
+    steps:
+      - name: Free up disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /usr/local/share/boost
+          df -h
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+
+      - name: Install Python dependencies
+        run: |
+          pip install requests pydub boto3
+
+      - name: Wait for VOICEVOX
+        run: |
+          echo "Waiting for VOICEVOX engine..."
+          for i in {1..30}; do
+            if curl -s http://localhost:50021/version > /dev/null; then
+              echo "VOICEVOX is ready!"
+              curl -s http://localhost:50021/version
+              break
+            fi
+            echo "Waiting... ($i/30)"
+            sleep 2
+          done
+
+      - name: Determine date and time slot
+        id: params
+        run: |
+          # 日付決定
+          if [ "${{ github.event.client_payload.date }}" != "" ]; then
+            DATE="${{ github.event.client_payload.date }}"
+          elif [ "${{ github.event.inputs.date }}" != "" ]; then
+            DATE="${{ github.event.inputs.date }}"
+          else
+            DATE=$(TZ=Asia/Tokyo date +%Y-%m-%d)
+          fi
+          echo "date=$DATE" >> $GITHUB_OUTPUT
+
+          # タイムスロット決定
+          if [ "${{ github.event.client_payload.time_slot }}" != "" ]; then
+            TIME_SLOT="${{ github.event.client_payload.time_slot }}"
+          elif [ "${{ github.event.inputs.time_slot }}" != "" ] && [ "${{ github.event.inputs.time_slot }}" != "auto" ]; then
+            TIME_SLOT="${{ github.event.inputs.time_slot }}"
+          else
+            # JST時刻で自動判定
+            HOUR=$(TZ=Asia/Tokyo date +%H)
+            MINUTE=$(TZ=Asia/Tokyo date +%M)
+            TIME_VALUE=$((HOUR * 60 + MINUTE))
+
+            if [ $TIME_VALUE -ge 360 ] && [ $TIME_VALUE -lt 690 ]; then
+              TIME_SLOT="morning"
+            elif [ $TIME_VALUE -ge 690 ] && [ $TIME_VALUE -lt 930 ]; then
+              TIME_SLOT="noon"
+            elif [ $TIME_VALUE -ge 930 ] && [ $TIME_VALUE -lt 1200 ]; then
+              TIME_SLOT="evening"
+            else
+              TIME_SLOT="night"
+            fi
+          fi
+          echo "time_slot=$TIME_SLOT" >> $GITHUB_OUTPUT
+
+          echo "Selected: date=$DATE, time_slot=$TIME_SLOT"
+
+      - name: Generate diary audio
+        run: |
+          DATE="${{ steps.params.outputs.date }}"
+          TIME_SLOT="${{ steps.params.outputs.time_slot }}"
+
+          echo "Generating audio for diary: $DATE ($TIME_SLOT)"
+          mkdir -p output/diary
+
+          python diary/diary_to_audio.py \
+            --date "$DATE" \
+            --time-slot "$TIME_SLOT" \
+            --output-dir output/diary
+
+          ls -la output/diary/
+
+      - name: Upload to R2
+        env:
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET }}
+        run: |
+          DATE="${{ steps.params.outputs.date }}"
+          python diary/upload_diary_audio.py --input-dir output/diary --date "$DATE"
