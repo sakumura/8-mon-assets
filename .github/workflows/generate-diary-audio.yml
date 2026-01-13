@@ -1,7 +1,18 @@
 name: Generate Diary Audio
 
 on:
-  # 8-monからのrepository_dispatchで即時トリガー
+  # 定期実行（日記生成の5分後）
+  schedule:
+    # morning: JST 08:35 = UTC 23:35 (前日)
+    - cron: '35 23 * * 0-4'  # 日〜木（JST月〜金の朝）
+    # noon: JST 11:35 = UTC 02:35
+    - cron: '35 2 * * 1-5'   # 月〜金
+    # evening: JST 15:35 = UTC 06:35
+    - cron: '35 6 * * 1-5'   # 月〜金
+    # night: JST 21:05 = UTC 12:05
+    - cron: '5 12 * * 1-5'   # 月〜金
+
+  # 8-monからのrepository_dispatchで即時トリガー（オプション）
   repository_dispatch:
     types: [diary-updated]
 
