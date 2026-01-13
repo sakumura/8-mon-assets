@@ -12,18 +12,16 @@ import boto3
 from botocore.config import Config
 
 # R2設定（環境変数から取得）
-R2_ACCOUNT_ID = os.environ.get("R2_ACCOUNT_ID")
+R2_ENDPOINT = os.environ.get("R2_ENDPOINT")
 R2_ACCESS_KEY_ID = os.environ.get("R2_ACCESS_KEY_ID")
 R2_SECRET_ACCESS_KEY = os.environ.get("R2_SECRET_ACCESS_KEY")
-R2_BUCKET_NAME = os.environ.get("R2_BUCKET_NAME", "8-mon-assets")
-
-R2_ENDPOINT = f"https://{R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
+R2_BUCKET_NAME = os.environ.get("R2_BUCKET", "8-mon-assets")
 
 
 def get_r2_client():
     """R2クライアントを作成"""
-    if not all([R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY]):
-        raise ValueError("R2 credentials not set. Required: R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY")
+    if not all([R2_ENDPOINT, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY]):
+        raise ValueError("R2 credentials not set. Required: R2_ENDPOINT, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY")
 
     return boto3.client(
         "s3",
