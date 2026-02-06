@@ -300,6 +300,22 @@ def fetch_option_oi() -> dict:
         return {}
 
 
+def fetch_foreign_investor() -> dict:
+    """本番APIから外国人投資家フローを取得"""
+    try:
+        req = urllib.request.Request(
+            "https://8-mon.com/foreign-investor.json",
+            headers={"User-Agent": "GaryuRadio/1.0"}
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            print(f"  [API] Foreign investor: {data.get('weekly', {}).get('latest', {}).get('date')}")
+            return data
+    except Exception as e:
+        print(f"  Warning: Failed to fetch foreign investor data: {e}")
+        return {}
+
+
 def scrape_google_news_nikkei() -> list[str]:
     """Google Newsから日経関連ニュースをスクレイピング"""
     try:
@@ -879,6 +895,145 @@ def generate_correlation() -> list[DialogueLine]:
     return lines
 
 
+def generate_foreign_investor() -> list[DialogueLine]:
+    """外国人投資家フロー分析
+
+    データソース: 財務省の対内証券投資データ（週次）
+    - 週次ネットフロー
+    - 52週累積フロー
+    - リードラグ相関（将来リターンとの相関）
+    """
+    # データ取得
+    fi_data = fetch_foreign_investor()
+    cached = fetch_ai_comment("foreignInvestor")
+
+    weekly = fi_data.get("weekly", {})
+    latest = weekly.get("latest", {})
+    cumulative_52w = weekly.get("cumulative_52w", 0)
+    lead_lag = fi_data.get("lead_lag", {})
+
+    net = latest.get("net", 0)
+    net_billion = latest.get("net_billion", 0)
+    percentile = latest.get("percentile", 50)
+    peak_lag = lead_lag.get("peak_lag", 0)
+    peak_correlation = lead_lag.get("peak_correlation", 0)
+
+    # === 導入パート: データソースの説明 ===
+    lines = [
+        DialogueLine("metan", "次は外国人投資家フローを見ていきましょう。"),
+        DialogueLine("zundamon", "外国人投資家？海外からお金が来てるのだ？"),
+        DialogueLine("metan", "はい。このデータは財務省の対内証券投資統計をもとにしています。"),
+        DialogueLine("zundamon", "財務省が発表してるのだ！"),
+        DialogueLine("metan", "毎週木曜日に更新される公式データです。"),
+    ]
+
+    # === 直近週のフロー ===
+    if net > 0:
+        flow_direction = "買い越し"
+        flow_desc = "外国人投資家が日本株を買っている"
+    else:
+        flow_direction = "売り越し"
+        flow_desc = "外国人投資家が日本株を売っている"
+
+    lines.extend([
+        DialogueLine("zundamon", "で、今週はどうだったのだ？"),
+        DialogueLine("metan", f"直近週は{abs(net_billion):.0f}億円の{flow_direction}でした。"),
+    ])
+
+    if net > 5000:
+        lines.extend([
+            DialogueLine("zundamon", "おお！たくさん買ってるのだ！"),
+            DialogueLine("metan", "そうですね。外国人の強気姿勢が見えます。"),
+        ])
+    elif net > 0:
+        lines.extend([
+            DialogueLine("zundamon", "ちょっと買い越しなのだ。"),
+            DialogueLine("metan", "小幅ながら{flow_desc}状況です。"),
+        ])
+    elif net > -5000:
+        lines.extend([
+            DialogueLine("zundamon", "ちょっと売り越しなのだ。"),
+            DialogueLine("metan", "利益確定売りか、様子見の姿勢かもしれません。"),
+        ])
+    else:
+        lines.extend([
+            DialogueLine("zundamon", "たくさん売ってるのだ。大丈夫なのだ？"),
+            DialogueLine("metan", "大規模な売り越しですね。警戒が必要です。"),
+        ])
+
+    # === パーセンタイル解説 ===
+    lines.extend([
+        DialogueLine("metan", f"過去データと比較したパーセンタイルは{percentile:.0f}パーセントです。"),
+    ])
+
+    if percentile <= 20:
+        lines.append(DialogueLine("zundamon", "かなり売り越しが多い水準なのだ！"))
+        lines.append(DialogueLine("metan", "過去の中でも下位20パーセントに入る弱気な状況です。"))
+    elif percentile <= 40:
+        lines.append(DialogueLine("zundamon", "やや弱気なのだ？"))
+        lines.append(DialogueLine("metan", "平均より売り越し傾向ですね。"))
+    elif percentile <= 60:
+        lines.append(DialogueLine("zundamon", "真ん中あたりなのだ。"))
+        lines.append(DialogueLine("metan", "平均的な水準です。"))
+    elif percentile <= 80:
+        lines.append(DialogueLine("zundamon", "やや買い越し傾向なのだ！"))
+        lines.append(DialogueLine("metan", "外国人が強気に転じている兆候かもしれません。"))
+    else:
+        lines.append(DialogueLine("zundamon", "すごく買い越してるのだ！"))
+        lines.append(DialogueLine("metan", "過去の中でも上位20パーセントに入る強気な状況です。"))
+
+    # === 52週累積フロー ===
+    cumulative_billion = cumulative_52w / 100
+    lines.extend([
+        DialogueLine("zundamon", "長い目で見るとどうなのだ？"),
+        DialogueLine("metan", f"52週間の累積フローは{cumulative_billion:.0f}億円です。"),
+    ])
+
+    if cumulative_52w > 50000:
+        lines.extend([
+            DialogueLine("zundamon", "1年間でたくさん買ってるのだ！"),
+            DialogueLine("metan", "外国人投資家は日本株に強気の姿勢を続けています。"),
+        ])
+    elif cumulative_52w > 0:
+        lines.extend([
+            DialogueLine("zundamon", "トータルでは買い越しなのだ。"),
+            DialogueLine("metan", "緩やかながら買い越しトレンドが続いています。"),
+        ])
+    elif cumulative_52w > -30000:
+        lines.extend([
+            DialogueLine("zundamon", "トータルでは売り越しなのだ。"),
+            DialogueLine("metan", "緩やかな売り越しトレンドですね。"),
+        ])
+    else:
+        lines.extend([
+            DialogueLine("zundamon", "1年間でたくさん売ってるのだ。"),
+            DialogueLine("metan", "外国人投資家の日本株離れが続いています。"),
+        ])
+
+    # === リードラグ相関 ===
+    if peak_correlation >= 0.25:
+        lines.extend([
+            DialogueLine("zundamon", "このデータって役に立つのだ？"),
+            DialogueLine("metan", f"実は外国人フローは{peak_lag}週後のリターンと相関係数{peak_correlation:.2f}の関係があります。"),
+            DialogueLine("zundamon", "未来が予測できるのだ？"),
+            DialogueLine("metan", "予測というより、先行指標として参考になります。"),
+        ])
+        if peak_correlation >= 0.4:
+            lines.append(DialogueLine("metan", "特に今は相関が強いので、外国人の動きは重要なシグナルです。"))
+            lines.append(DialogueLine("zundamon", "要チェックなのだ！"))
+
+    # === AIコメント ===
+    if cached:
+        lines.extend([
+            DialogueLine("metan", "それでは臥龍ちゃんの分析です。"),
+            DialogueLine("metan", cached),
+        ])
+
+    lines.append(DialogueLine("zundamon", "外国人の動きは大事なのだ！"))
+
+    return lines
+
+
 def generate_option() -> list[DialogueLine]:
     """オプション建玉分析"""
     cached = fetch_ai_comment("option")
@@ -1050,6 +1205,7 @@ CORNERS = [
     ("sentiment", generate_sentiment),
     ("volatility", generate_volatility),
     ("correlation", generate_correlation),
+    ("foreign-investor", generate_foreign_investor),  # 外国人投資家フロー
     ("option", generate_option),
     ("narrative", generate_narrative),
     ("closing", generate_closing),
